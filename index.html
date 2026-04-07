@@ -265,14 +265,29 @@
       overflow: auto;
       position: relative;
       touch-action: none;
+      overscroll-behavior: contain;
+    }
+
+    .play-stage.pan-mode,
+    #playCanvas.pan-mode {
+      cursor: grab;
+    }
+
+    .play-stage.dragging,
+    .play-stage.dragging #playCanvas,
+    #playCanvas.dragging {
+      cursor: grabbing;
     }
 
     .stage-inner {
       min-height: 60vh;
+      min-width: 100%;
+      width: max-content;
       display: flex;
       justify-content: center;
       align-items: flex-start;
       padding: 20px;
+      box-sizing: border-box;
     }
 
     #playCanvas {
@@ -280,6 +295,7 @@
       background: #fff;
       touch-action: none;
       box-shadow: 0 10px 24px rgba(25, 42, 70, 0.08);
+      flex: 0 0 auto;
     }
 
     .zoom-controls {
@@ -420,7 +436,7 @@
 
     <section id="offlineView" class="panel">
       <div class="section-title">1. 離線功能：匯入圖片、像素化、產生 JSON</div>
-      <div class="section-desc">流程：匯入圖片 → 命名 → 降採樣像素化 → 限制成 5~12 色 → 自動編號 → 去背保留主體 → 匯出 JSON / 像素圖 / 線條底圖。</div>
+      <div class="section-desc">流程：匯入圖片 → 命名 → 降採樣像素化 → 限制成 5~12 色 → 自動編號 → 匯出 JSON / 像素圖 / 線條底圖。</div>
 
       <div class="offline-layout">
         <div class="panel" style="padding:14px;">
@@ -445,17 +461,6 @@
               </select>
             </div>
             <div class="field">
-              <label for="removeBgToggle">底圖去背</label>
-              <select id="removeBgToggle">
-                <option value="1" selected>是，保留主體線條</option>
-                <option value="0">否，保留整張格子</option>
-              </select>
-            </div>
-            <div class="field">
-              <label for="bgTolerance">去背容差</label>
-              <input id="bgTolerance" type="number" min="5" max="120" value="32" />
-            </div>
-            <div class="field">
               <label for="exportCellSize">匯出格子尺寸</label>
               <input id="exportCellSize" type="number" min="8" max="40" value="18" />
             </div>
@@ -467,7 +472,7 @@
           </div>
 
           <div class="hint-box">
-            建議先用 24~40 格寬測試。若原圖背景單純，開啟去背後可只保留主體與內部結構線；像魔術方塊這種圖，外框與每一小格線條都會保留。若去背過多或過少，可調整「去背容差」。
+            建議先用 24~40 格寬測試。格數越大，圖片越細緻；格數越小，越像傳統像素塗色書。
           </div>
 
           <div class="export-list">
@@ -490,7 +495,7 @@
               <div class="canvas-wrap"><canvas id="pixelCanvas"></canvas></div>
             </div>
             <div class="preview-box">
-              <h3>底圖（描邊線稿 + 編號）</h3>
+              <h3>底圖（線條 + 編號）</h3>
               <div class="canvas-wrap"><canvas id="outlineCanvas"></canvas></div>
             </div>
           </div>
@@ -573,6 +578,7 @@
           <div class="zoom-controls">
             <button class="btn zoom-btn" id="zoomInBtn">＋</button>
             <button class="btn zoom-btn" id="zoomOutBtn">－</button>
+            <button class="btn zoom-btn" id="panModeBtn" title="切換拖拉模式">✋</button>
           </div>
         </div>
       </div>
@@ -590,7 +596,10 @@
       selectedPaletteIndex: null,
       forceFill: false,
       zoom: 24,
-      isPainting: false
+      isPainting: false,
+      panMode: false,
+      isPanning: false,
+      panStart: null
     };
 
     const els = {
@@ -604,8 +613,6 @@
       imageFile: document.getElementById('imageFile'),
       gridWidth: document.getElementById('gridWidth'),
       paletteCount: document.getElementById('paletteCount'),
-      removeBgToggle: document.getElementById('removeBgToggle'),
-      bgTolerance: document.getElementById('bgTolerance'),
       exportCellSize: document.getElementById('exportCellSize'),
       generateBtn: document.getElementById('generateBtn'),
       loadDemoBtn: document.getElementById('loadDemoBtn'),
@@ -636,7 +643,8 @@
       forceFillToggle: document.getElementById('forceFillToggle'),
       selectedColorText: document.getElementById('selectedColorText'),
       zoomInBtn: document.getElementById('zoomInBtn'),
-      zoomOutBtn: document.getElementById('zoomOutBtn')
+      zoomOutBtn: document.getElementById('zoomOutBtn'),
+      panModeBtn: document.getElementById('panModeBtn')
     };
 
     function showView(target) {
@@ -682,17 +690,6 @@
       return (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2;
     }
 
-    function averageRgb(list) {
-      if (!list.length) return [255, 255, 255];
-      const sum = list.reduce((acc, rgb) => {
-        acc[0] += rgb[0];
-        acc[1] += rgb[1];
-        acc[2] += rgb[2];
-        return acc;
-      }, [0, 0, 0]);
-      return sum.map(v => Math.round(v / list.length));
-    }
-
     function drawFittedImage(canvas, image) {
       const maxW = 320;
       const scale = Math.min(1, maxW / image.width);
@@ -718,7 +715,7 @@
       });
     }
 
-    function downsampleImage(image, targetWidth, options = {}) {
+    function downsampleImage(image, targetWidth) {
       const width = clamp(parseInt(targetWidth, 10) || 32, 8, 128);
       const ratio = image.height / image.width;
       const height = Math.max(1, Math.round(width * ratio));
@@ -729,64 +726,31 @@
       ctx.imageSmoothingEnabled = true;
       ctx.drawImage(image, 0, 0, width, height);
       const imageData = ctx.getImageData(0, 0, width, height).data;
-      const rawPixels = [];
-
+      const pixels = [];
       for (let i = 0; i < imageData.length; i += 4) {
         const alpha = imageData[i + 3] / 255;
-        if (alpha < 0.08) {
-          rawPixels.push(null);
-          continue;
-        }
-        rawPixels.push([imageData[i], imageData[i + 1], imageData[i + 2]]);
+        const rgb = alpha < 0.1
+          ? [255, 255, 255]
+          : [imageData[i], imageData[i + 1], imageData[i + 2]];
+        pixels.push(rgb);
       }
-
-      const removeBackground = !!options.removeBackground;
-      if (!removeBackground) {
-        return { width, height, pixels: rawPixels.map(p => p || [255, 255, 255]), backgroundColor: null };
-      }
-
-      const cornerIndexes = [
-        0,
-        Math.max(0, width - 1),
-        Math.max(0, (height - 1) * width),
-        Math.max(0, width * height - 1)
-      ];
-      const cornerPixels = cornerIndexes.map(i => rawPixels[i]).filter(Boolean);
-      const backgroundColor = averageRgb(cornerPixels.length ? cornerPixels : [[255, 255, 255]]);
-      const tolerance = clamp(parseInt(options.backgroundTolerance, 10) || 32, 5, 120);
-      const toleranceSq = tolerance * tolerance * 3;
-
-      const pixels = rawPixels.map(rgb => {
-        if (!rgb) return null;
-        return distanceSq(rgb, backgroundColor) <= toleranceSq ? null : rgb;
-      });
-
-      return { width, height, pixels, backgroundColor };
+      return { width, height, pixels };
     }
 
     function kMeansQuantize(pixels, k) {
-      const safeK = clamp(parseInt(k, 10) || 8, 1, 12);
-      const solidEntries = pixels
-        .map((p, index) => p ? { rgb: p, index } : null)
-        .filter(Boolean);
-
-      if (!solidEntries.length) {
-        return { palette: [], cells: new Array(pixels.length).fill(null) };
-      }
-
-      const unique = [...new Map(solidEntries.map(item => [item.rgb.join(','), item.rgb])).values()];
-      const centroidCount = Math.min(safeK, unique.length);
+      const safeK = clamp(parseInt(k, 10) || 8, 5, 12);
+      const unique = [...new Map(pixels.map(p => [p.join(','), p])).values()];
       const centroids = [];
-      for (let i = 0; i < centroidCount; i++) {
-        centroids.push(unique[Math.floor((i * unique.length) / centroidCount)] || unique[0] || [255,255,255]);
+      for (let i = 0; i < safeK; i++) {
+        centroids.push(unique[Math.floor((i * unique.length) / safeK)] || unique[0] || [255,255,255]);
       }
 
-      let assignments = new Array(solidEntries.length).fill(0);
+      let assignments = new Array(pixels.length).fill(0);
       for (let round = 0; round < 10; round++) {
         let moved = false;
 
-        for (let i = 0; i < solidEntries.length; i++) {
-          const pixel = solidEntries[i].rgb;
+        for (let i = 0; i < pixels.length; i++) {
+          const pixel = pixels[i];
           let bestIndex = 0;
           let bestDistance = Infinity;
           for (let c = 0; c < centroids.length; c++) {
@@ -801,12 +765,12 @@
         }
 
         const sums = Array.from({ length: centroids.length }, () => [0, 0, 0, 0]);
-        for (let i = 0; i < solidEntries.length; i++) {
+        for (let i = 0; i < pixels.length; i++) {
           const idx = assignments[i];
           const bucket = sums[idx];
-          bucket[0] += solidEntries[i].rgb[0];
-          bucket[1] += solidEntries[i].rgb[1];
-          bucket[2] += solidEntries[i].rgb[2];
+          bucket[0] += pixels[i][0];
+          bucket[1] += pixels[i][1];
+          bucket[2] += pixels[i][2];
           bucket[3] += 1;
         }
 
@@ -838,10 +802,7 @@
         rgb: item.rgb,
         count: item.count
       }));
-      const cells = new Array(pixels.length).fill(null);
-      solidEntries.forEach((entry, i) => {
-        cells[entry.index] = remap.get(assignments[i]);
-      });
+      const cells = assignments.map(index => remap.get(index));
 
       return { palette, cells };
     }
@@ -851,87 +812,23 @@
       const width = clamp(parseInt(els.gridWidth.value, 10) || 32, 8, 128);
       const paletteCount = clamp(parseInt(els.paletteCount.value, 10) || 8, 5, 12);
       const exportCellSize = clamp(parseInt(els.exportCellSize.value, 10) || 18, 8, 40);
-      const removeBackground = els.removeBgToggle.value === '1';
-      const backgroundTolerance = clamp(parseInt(els.bgTolerance.value, 10) || 32, 5, 120);
-      const downsampled = downsampleImage(image, width, { removeBackground, backgroundTolerance });
+      const downsampled = downsampleImage(image, width);
       const quantized = kMeansQuantize(downsampled.pixels, paletteCount);
-      const lineSegments = buildLineSegments(downsampled.width, downsampled.height, downsampled.pixels, quantized.cells);
 
       return {
-        version: 2,
+        version: 1,
         name: baseName,
         width: downsampled.width,
         height: downsampled.height,
         exportCellSize,
         palette: quantized.palette,
         cells: quantized.cells,
-        lineSegments,
         meta: {
           createdAt: new Date().toISOString(),
           sourceWidth: image.width,
-          sourceHeight: image.height,
-          removeBackground,
-          backgroundTolerance,
-          backgroundColor: downsampled.backgroundColor ? hexFromRgb(downsampled.backgroundColor) : null
+          sourceHeight: image.height
         }
       };
-    }
-
-    function buildLineSegments(width, height, pixels, cells) {
-      const edgeThresholdSq = 24 * 24 * 3;
-      const segments = [];
-      const seen = new Set();
-
-      const hasCell = index => index >= 0 && index < cells.length && cells[index] != null;
-
-      const addSegment = (x1, y1, x2, y2) => {
-        const key = `${x1},${y1},${x2},${y2}`;
-        if (seen.has(key)) return;
-        seen.add(key);
-        segments.push([x1, y1, x2, y2]);
-      };
-
-      for (let y = 0; y < height; y++) {
-        for (let x = 0; x < width; x++) {
-          const idx = y * width + x;
-          if (!hasCell(idx)) continue;
-
-          const currentPixel = pixels[idx];
-          const currentCell = cells[idx];
-
-          const shouldDrawEdge = (neighborX, neighborY) => {
-            if (neighborX < 0 || neighborY < 0 || neighborX >= width || neighborY >= height) return true;
-            const neighborIdx = neighborY * width + neighborX;
-            if (!hasCell(neighborIdx)) return true;
-
-            if (cells[neighborIdx] !== currentCell) return true;
-
-            const neighborPixel = pixels[neighborIdx];
-            if (!currentPixel || !neighborPixel) return false;
-            return distanceSq(currentPixel, neighborPixel) >= edgeThresholdSq;
-          };
-
-          if (shouldDrawEdge(x, y - 1)) addSegment(x, y, x + 1, y);
-          if (shouldDrawEdge(x + 1, y)) addSegment(x + 1, y, x + 1, y + 1);
-          if (shouldDrawEdge(x, y + 1)) addSegment(x, y + 1, x + 1, y + 1);
-          if (shouldDrawEdge(x - 1, y)) addSegment(x, y, x, y + 1);
-        }
-      }
-
-      return segments;
-    }
-
-    function deriveLineSegmentsFromArtwork(artwork) {
-      if (Array.isArray(artwork.lineSegments) && artwork.lineSegments.length) return artwork.lineSegments;
-
-      const pseudoPixels = artwork.cells.map(index => {
-        if (index == null || !artwork.palette[index]) return null;
-        return artwork.palette[index].rgb || rgbFromHex(artwork.palette[index].hex);
-      });
-
-      const derived = buildLineSegments(artwork.width, artwork.height, pseudoPixels, artwork.cells);
-      artwork.lineSegments = derived;
-      return derived;
     }
 
     function renderPixelArt(canvas, artwork, options = {}) {
@@ -939,7 +836,6 @@
         showNumbers = false,
         showGrid = true,
         showColors = true,
-        showLineArt = false,
         cellSize = artwork.exportCellSize || 18,
         paintedCells = null,
         numberAlpha = 1,
@@ -961,53 +857,21 @@
         for (let x = 0; x < artwork.width; x++) {
           const idx = y * artwork.width + x;
           const paletteIndex = artwork.cells[idx];
-          if (paletteIndex == null) continue;
-
           const paletteItem = artwork.palette[paletteIndex];
-          const paintedColor = paintedCells && paintedCells[idx] != null && artwork.palette[paintedCells[idx]]
-            ? artwork.palette[paintedCells[idx]].hex
-            : null;
           const fillColor = paintedCells
-            ? (paintedColor || (showColors ? paletteItem.hex : 'rgba(255,255,255,0)'))
-            : (showColors ? paletteItem.hex : 'rgba(255,255,255,0)');
+            ? (paintedCells[idx] != null ? artwork.palette[paintedCells[idx]].hex : '#FFFFFF')
+            : (showColors ? paletteItem.hex : '#FFFFFF');
 
-          if (fillColor !== 'rgba(255,255,255,0)') {
-            ctx.fillStyle = fillColor;
-            ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
-          }
+          ctx.fillStyle = fillColor;
+          ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
 
           if (showGrid) {
             ctx.strokeStyle = '#D7DEE8';
             ctx.lineWidth = Math.max(1, Math.floor(cellSize / 18));
             ctx.strokeRect(x * cellSize, y * cellSize, cellSize, cellSize);
           }
-        }
-      }
 
-      if (showLineArt) {
-        const segments = deriveLineSegmentsFromArtwork(artwork);
-        ctx.save();
-        ctx.strokeStyle = '#111827';
-        ctx.lineWidth = Math.max(1.25, cellSize * 0.12);
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-        ctx.beginPath();
-        for (const segment of segments) {
-          ctx.moveTo(segment[0] * cellSize, segment[1] * cellSize);
-          ctx.lineTo(segment[2] * cellSize, segment[3] * cellSize);
-        }
-        ctx.stroke();
-        ctx.restore();
-      }
-
-      if (showNumbers) {
-        for (let y = 0; y < artwork.height; y++) {
-          for (let x = 0; x < artwork.width; x++) {
-            const idx = y * artwork.width + x;
-            const paletteIndex = artwork.cells[idx];
-            if (paletteIndex == null) continue;
-
-            const paletteItem = artwork.palette[paletteIndex];
+          if (showNumbers) {
             ctx.save();
             ctx.globalAlpha = numberAlpha;
             ctx.fillStyle = '#243042';
@@ -1031,12 +895,10 @@
       });
       renderPixelArt(els.outlineCanvas, state.generated, {
         showColors: false,
-        showGrid: false,
-        showLineArt: true,
+        showGrid: true,
         showNumbers: true,
         cellSize: state.generated.exportCellSize,
-        numberAlpha: 0.9,
-        whiteBackground: false
+        numberAlpha: 0.9
       });
       renderPaletteSummary(state.generated.palette);
     }
@@ -1078,8 +940,7 @@
       state.generated = buildGeneratedArtwork(name, state.sourceImage);
       updateOfflinePreviews();
       setGeneratedReady(true);
-      const activeCellCount = state.generated.cells.filter(v => v != null).length;
-      els.offlineStatus.textContent = `已完成：${state.generated.name}，尺寸 ${state.generated.width} × ${state.generated.height}，共 ${state.generated.palette.length} 色，可上色區塊 ${activeCellCount} 格。`;
+      els.offlineStatus.textContent = `已完成：${state.generated.name}，尺寸 ${state.generated.width} × ${state.generated.height}，共 ${state.generated.palette.length} 色。`;
     }
 
     async function loadDemoImage() {
@@ -1248,6 +1109,10 @@
       state.zoom = clamp(artwork.exportCellSize || 18, 16, 40);
       state.selectedPaletteIndex = 0;
       state.forceFill = false;
+      state.panMode = false;
+      state.isPainting = false;
+      state.isPanning = false;
+      state.panStart = null;
       els.forceFillToggle.checked = false;
 
       const stored = localStorage.getItem(progressKey(artwork));
@@ -1256,11 +1121,13 @@
         : new Array(artwork.cells.length).fill(null);
 
       els.playTitle.textContent = artwork.name || '未命名圖片';
-      els.playSubtitle.textContent = `請先從下方選擇色塊，再點擊底圖上的對應編號。相同編號才會填色，除非已勾選「強制填色」。`;
+      els.playSubtitle.textContent = `填色模式可直接點擊上色；放大後若要拖動畫面，請按右側手掌按鈕切換到拖拉模式。`;
       renderPaletteBar(artwork);
       updateSelectedColorText();
-      renderPlayCanvas();
+      updatePanModeUI();
       showPlay();
+      renderPlayCanvas();
+      requestAnimationFrame(centerCanvasInStage);
     }
 
     function renderPaletteBar(artwork) {
@@ -1283,25 +1150,108 @@
     }
 
     function updateSelectedColorText() {
+      const modeText = state.panMode ? '拖拉模式' : '填色模式';
       if (!state.currentArtwork || state.selectedPaletteIndex == null) {
-        els.selectedColorText.textContent = '尚未選擇色塊';
+        els.selectedColorText.textContent = `${modeText} ｜ 尚未選擇色塊`;
         return;
       }
       const item = state.currentArtwork.palette[state.selectedPaletteIndex];
-      els.selectedColorText.textContent = `目前顏色：編號 ${item.id} / ${item.hex}`;
+      els.selectedColorText.textContent = `${modeText} ｜ 目前顏色：編號 ${item.id} / ${item.hex}`;
     }
 
     function renderPlayCanvas() {
       if (!state.currentArtwork) return;
       renderPixelArt(els.playCanvas, state.currentArtwork, {
         showColors: false,
-        showGrid: false,
-        showLineArt: true,
+        showGrid: true,
         showNumbers: true,
         paintedCells: state.paintedCells,
         cellSize: state.zoom,
         numberAlpha: 0.92
       });
+    }
+
+    function updatePanModeUI() {
+      els.panModeBtn.classList.toggle('primary', state.panMode);
+      els.panModeBtn.classList.toggle('active', state.panMode);
+      els.playStage.classList.toggle('pan-mode', state.panMode);
+      els.playCanvas.classList.toggle('pan-mode', state.panMode);
+      if (!state.panMode) {
+        els.playStage.classList.remove('dragging');
+        els.playCanvas.classList.remove('dragging');
+      }
+      updateSelectedColorText();
+    }
+
+    function centerCanvasInStage() {
+      const maxLeft = Math.max(0, els.playStage.scrollWidth - els.playStage.clientWidth);
+      const maxTop = Math.max(0, els.playStage.scrollHeight - els.playStage.clientHeight);
+      els.playStage.scrollLeft = maxLeft / 2;
+      els.playStage.scrollTop = maxTop / 2;
+    }
+
+    function adjustZoom(delta) {
+      if (!state.currentArtwork) return;
+      const oldZoom = state.zoom;
+      const nextZoom = clamp(state.zoom + delta, 8, 80);
+      if (nextZoom === oldZoom) return;
+
+      const viewportCenterX = els.playStage.scrollLeft + els.playStage.clientWidth / 2;
+      const viewportCenterY = els.playStage.scrollTop + els.playStage.clientHeight / 2;
+      const ratio = nextZoom / oldZoom;
+
+      state.zoom = nextZoom;
+      renderPlayCanvas();
+
+      requestAnimationFrame(() => {
+        const targetLeft = viewportCenterX * ratio - els.playStage.clientWidth / 2;
+        const targetTop = viewportCenterY * ratio - els.playStage.clientHeight / 2;
+        const maxLeft = Math.max(0, els.playStage.scrollWidth - els.playStage.clientWidth);
+        const maxTop = Math.max(0, els.playStage.scrollHeight - els.playStage.clientHeight);
+        els.playStage.scrollLeft = clamp(targetLeft, 0, maxLeft);
+        els.playStage.scrollTop = clamp(targetTop, 0, maxTop);
+      });
+    }
+
+    function shouldPanFromEvent(event) {
+      return !!state.panMode;
+    }
+
+    function startPan(event) {
+      state.isPanning = true;
+      state.isPainting = false;
+      state.panStart = {
+        x: event.clientX,
+        y: event.clientY,
+        scrollLeft: els.playStage.scrollLeft,
+        scrollTop: els.playStage.scrollTop
+      };
+      els.playStage.classList.add('dragging');
+      els.playCanvas.classList.add('dragging');
+      if (event.target.setPointerCapture) {
+        try { event.target.setPointerCapture(event.pointerId); } catch (_) {}
+      }
+      event.preventDefault();
+    }
+
+    function movePan(event) {
+      if (!state.isPanning || !state.panStart) return;
+      const dx = event.clientX - state.panStart.x;
+      const dy = event.clientY - state.panStart.y;
+      els.playStage.scrollLeft = state.panStart.scrollLeft - dx;
+      els.playStage.scrollTop = state.panStart.scrollTop - dy;
+      event.preventDefault();
+    }
+
+    function stopInteractions(event) {
+      state.isPainting = false;
+      state.isPanning = false;
+      state.panStart = null;
+      els.playStage.classList.remove('dragging');
+      els.playCanvas.classList.remove('dragging');
+      if (event?.target?.releasePointerCapture) {
+        try { event.target.releasePointerCapture(event.pointerId); } catch (_) {}
+      }
     }
 
     function savePaintingProgress() {
@@ -1342,8 +1292,7 @@
       const exportCanvas = document.createElement('canvas');
       renderPixelArt(exportCanvas, state.currentArtwork, {
         showColors: false,
-        showGrid: false,
-        showLineArt: true,
+        showGrid: true,
         showNumbers: false,
         paintedCells: state.paintedCells,
         cellSize: state.currentArtwork.exportCellSize || 18
@@ -1352,16 +1301,37 @@
     }
 
     function bindPlayCanvasEvents() {
-      const stopPaint = () => { state.isPainting = false; };
+      els.playStage.addEventListener('contextmenu', event => event.preventDefault());
+      els.playCanvas.addEventListener('dragstart', event => event.preventDefault());
+
       els.playCanvas.addEventListener('pointerdown', event => {
+        if (!state.currentArtwork) return;
+        if (shouldPanFromEvent(event)) {
+          startPan(event);
+          return;
+        }
+        if (event.button !== 0) return;
         state.isPainting = true;
         paintAtEvent(event);
+        event.preventDefault();
       });
+
       els.playCanvas.addEventListener('pointermove', event => {
-        if (state.isPainting) paintAtEvent(event);
+        if (state.isPanning) {
+          movePan(event);
+          return;
+        }
+        if (state.isPainting) {
+          paintAtEvent(event);
+          event.preventDefault();
+        }
       });
-      window.addEventListener('pointerup', stopPaint);
-      window.addEventListener('pointercancel', stopPaint);
+
+      window.addEventListener('pointerup', stopInteractions);
+      window.addEventListener('pointercancel', stopInteractions);
+      window.addEventListener('pointermove', event => {
+        if (state.isPanning) movePan(event);
+      }, { passive: false });
     }
 
     function attachEvents() {
@@ -1409,11 +1379,9 @@
         const exportCanvas = document.createElement('canvas');
         renderPixelArt(exportCanvas, state.generated, {
           showColors: false,
-          showGrid: false,
-          showLineArt: true,
+          showGrid: true,
           showNumbers: true,
-          cellSize: state.generated.exportCellSize,
-          whiteBackground: false
+          cellSize: state.generated.exportCellSize
         });
         downloadCanvas(exportCanvas, `${sanitizeFileName(state.generated.name)}-outline.png`);
       });
@@ -1426,13 +1394,12 @@
       els.forceFillToggle.addEventListener('change', e => {
         state.forceFill = !!e.target.checked;
       });
-      els.zoomInBtn.addEventListener('click', () => {
-        state.zoom = clamp(state.zoom + 4, 8, 64);
-        renderPlayCanvas();
-      });
-      els.zoomOutBtn.addEventListener('click', () => {
-        state.zoom = clamp(state.zoom - 4, 8, 64);
-        renderPlayCanvas();
+      els.zoomInBtn.addEventListener('click', () => adjustZoom(4));
+      els.zoomOutBtn.addEventListener('click', () => adjustZoom(-4));
+      els.panModeBtn.addEventListener('click', () => {
+        state.panMode = !state.panMode;
+        stopInteractions();
+        updatePanModeUI();
       });
 
       bindPlayCanvasEvents();
