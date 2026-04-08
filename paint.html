@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>開始畫畫｜Pixel Paint Studio</title>
+  <link rel="stylesheet" href="./assets/style.css" />
+</head>
+<body data-page="paint">
+  <div class="app-shell">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">開始畫畫</h1>
+        <div class="page-subtitle">選擇一張圖片，載入對應的 JSON 後開始塗色。</div>
+      </div>
+      <div class="inline-actions">
+        <a class="btn" href="./index.html">返回首頁</a>
+      </div>
+    </div>
+
+<section id="onlineView">
+      <div id="galleryView" class="panel">
+        <div class="gallery-top">
+          <div>
+            <div class="section-title">2. 線上功能：選擇圖片開始畫畫</div>
+            <div class="section-desc">系統會讀取 GitHub repo 內的 JSON 檔案，並自動顯示成卡片清單。</div>
+          </div>
+          <div class="inline-actions">
+            <button class="btn primary" id="loadGalleryBtn">重新載入圖片</button>
+          </div>
+        </div>
+
+        <div class="repo-form">
+          <div class="field">
+            <label for="repoOwner">GitHub Owner</label>
+            <input id="repoOwner" type="text" placeholder="例如 daisytzeng" />
+          </div>
+          <div class="field">
+            <label for="repoName">Repo 名稱</label>
+            <input id="repoName" type="text" placeholder="例如 pixel-paint" />
+          </div>
+          <div class="field">
+            <label for="repoBranch">Branch</label>
+            <input id="repoBranch" type="text" value="main" />
+          </div>
+          <div class="field">
+            <label for="repoPath">JSON 資料夾</label>
+            <input id="repoPath" type="text" value="data/json" />
+          </div>
+          <div class="field" style="min-width:120px; flex:0 0 120px; align-self:flex-end;">
+            <button class="btn" id="saveRepoBtn">儲存設定</button>
+          </div>
+        </div>
+
+        <div class="status-line" id="galleryStatus">尚未讀取圖片資料。</div>
+        <div id="galleryGrid" class="gallery-grid" style="margin-top:14px;"></div>
+      </div>
+
+      <div id="playView" class="panel hidden">
+        <div class="play-topbar" style="justify-content: space-between; margin-bottom: 14px;">
+          <div>
+            <div class="section-title" id="playTitle">開始繪圖</div>
+            <div class="section-desc" id="playSubtitle">請先從圖片選單選一張圖。</div>
+          </div>
+          <div class="toolbar">
+            <button class="btn danger" id="clearPaintBtn">清除重繪</button>
+            <button class="btn" id="backToGalleryBtn">返回圖片選單</button>
+            <button class="btn primary" id="exportPaintBtn">匯出繪圖結果</button>
+          </div>
+        </div>
+
+        <div class="play-area">
+          <div>
+            <div class="play-stage" id="playStage">
+              <div class="stage-inner">
+                <canvas id="playCanvas"></canvas>
+              </div>
+            </div>
+
+            <div class="palette-bar">
+              <div class="palette-actions" style="margin-bottom:10px; justify-content: space-between;">
+                <div class="pill">
+                  <input id="forceFillToggle" type="checkbox" />
+                  <label for="forceFillToggle">強制填色</label>
+                </div>
+                <div class="muted" id="selectedColorText">尚未選擇色塊</div>
+              </div>
+              <div class="palette-scroll" id="paletteBar"></div>
+            </div>
+          </div>
+
+          <div class="zoom-controls">
+            <button class="btn zoom-btn" id="zoomInBtn">＋</button>
+            <button class="btn zoom-btn" id="zoomOutBtn">－</button>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script src="./assets/app.js"></script>
+</body>
+</html>

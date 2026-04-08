@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>離線製圖｜Pixel Paint Studio</title>
+  <link rel="stylesheet" href="./assets/style.css" />
+</head>
+<body data-page="offline">
+  <div class="app-shell">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">離線製圖</h1>
+        <div class="page-subtitle">匯入圖片、像素化、產生 JSON、像素圖與線稿底圖。</div>
+      </div>
+      <div class="inline-actions">
+        <a class="btn" href="./index.html">返回首頁</a>
+      </div>
+    </div>
+
+<section id="offlineView" class="panel">
+      <div class="section-title">1. 離線功能：匯入圖片、像素化、產生 JSON</div>
+      <div class="section-desc">流程：匯入圖片 → 命名 → 降採樣像素化 → 限制成 5~12 色 → 自動編號 → 匯出 JSON / 像素圖 / 線條底圖。</div>
+
+      <div class="offline-layout">
+        <div class="panel" style="padding:14px;">
+          <div class="offline-grid">
+            <div class="field">
+              <label for="imageName">圖片名稱</label>
+              <input id="imageName" type="text" placeholder="例如：小貓咪" />
+            </div>
+            <div class="field">
+              <label for="imageFile">匯入圖片</label>
+              <input id="imageFile" type="file" accept="image/*" />
+            </div>
+            <div class="field">
+              <label for="gridWidth">像素寬度（格數）</label>
+              <input id="gridWidth" type="number" min="8" max="128" value="32" />
+            </div>
+            <div class="field">
+              <label for="paletteCount">顏色數量</label>
+              <select id="paletteCount">
+                <option>5</option><option>6</option><option>7</option><option selected>8</option>
+                <option>9</option><option>10</option><option>11</option><option>12</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="exportCellSize">匯出格子尺寸</label>
+              <input id="exportCellSize" type="number" min="8" max="40" value="18" />
+            </div>
+          </div>
+
+          <div class="inline-actions" style="margin-top: 14px;">
+            <button class="btn primary" id="generateBtn">解析並產生設定</button>
+            <button class="btn" id="loadDemoBtn">載入示範圖</button>
+          </div>
+
+          <div class="hint-box">
+            建議先用 24~40 格寬測試。格數越大，圖片越細緻；格數越小，越像傳統像素塗色書。
+          </div>
+
+          <div class="export-list">
+            <button class="btn" id="exportJsonBtn" disabled>匯出 JSON</button>
+            <button class="btn" id="exportPixelBtn" disabled>匯出像素化圖片</button>
+            <button class="btn" id="exportOutlineBtn" disabled>匯出底圖</button>
+          </div>
+
+          <div class="status-line" id="offlineStatus">尚未載入圖片。</div>
+        </div>
+
+        <div>
+          <div class="preview-grid">
+            <div class="preview-box">
+              <h3>原始圖片</h3>
+              <div class="canvas-wrap"><canvas id="sourceCanvas"></canvas></div>
+            </div>
+            <div class="preview-box">
+              <h3>像素化圖片</h3>
+              <div class="canvas-wrap"><canvas id="pixelCanvas"></canvas></div>
+            </div>
+            <div class="preview-box">
+              <h3>底圖（線條 + 編號）</h3>
+              <div class="canvas-wrap"><canvas id="outlineCanvas"></canvas></div>
+            </div>
+          </div>
+          <div class="hint-box" id="palettePreviewBox">完成解析後，這裡會顯示顏色編號摘要。</div>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script src="./assets/app.js"></script>
+</body>
+</html>
