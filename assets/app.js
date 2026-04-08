@@ -17,6 +17,7 @@ const state = {
       currentArtwork: null,
       paintedCells: [],
       selectedPaletteIndex: null,
+      dragFillLocked: false,
       bucketFillEnabled: false,
       drawTopbarCollapsed: null,
       zoom: 24,
@@ -32,11 +33,7 @@ const state = {
       touchPanStartY: 0,
       touchPanStartScrollLeft: 0,
       touchPanStartScrollTop: 0,
-      touchPanMoved: false,
-      touchTapTimeoutId: null,
-      lastTouchTapAt: 0,
-      lastTouchTapX: 0,
-      lastTouchTapY: 0
+      touchPanMoved: false
     };
 
     const els = {
@@ -929,6 +926,7 @@ const state = {
       state.currentArtwork = artwork;
       state.zoom = clamp(artwork.exportCellSize || 18, MIN_DRAW_ZOOM, MAX_DRAW_ZOOM);
       state.selectedPaletteIndex = 0;
+      state.dragFillLocked = false;
       state.bucketFillEnabled = false;
 
       const stored = localStorage.getItem(progressKey(artwork));
@@ -977,6 +975,25 @@ const state = {
     function renderPaletteBar(artwork) {
       if (!els.paletteBar) return;
       els.paletteBar.innerHTML = '';
+
+      const lockToggle = document.createElement('button');
+      lockToggle.type = 'button';
+      lockToggle.className = 'palette-tool' + (state.dragFillLocked ? ' active' : '');
+      lockToggle.setAttribute('aria-pressed', state.dragFillLocked ? 'true' : 'false');
+      lockToggle.setAttribute('title', '鎖定拖曳填色');
+      lockToggle.innerHTML = `
+        <span class="palette-tool-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" focusable="false">
+            <path d="M17 9h-1V7a4 4 0 0 0-8 0v2H7a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2Zm-6 0V7a2 2 0 1 1 4 0v2h-4Zm1 4h2v4h-2v-4Z"></path>
+          </svg>
+        </span>
+        <span class="palette-tool-check" aria-hidden="true">${state.dragFillLocked ? '✓' : ''}</span>
+      `;
+      lockToggle.addEventListener('click', () => {
+        state.dragFillLocked = !state.dragFillLocked;
+        renderPaletteBar(artwork);
+      });
+      els.paletteBar.appendChild(lockToggle);
 
       const bucketToggle = document.createElement('button');
       bucketToggle.type = 'button';
@@ -1232,35 +1249,9 @@ const state = {
       return true;
     }
 
-    function handleTouchTapOrDoubleTap(event) {
+    function handleTouchTap(event) {
       if (state.touchPanMoved) return;
-
-      const now = Date.now();
-      const isDoubleTap =
-        now - state.lastTouchTapAt < 320 &&
-        Math.abs(event.clientX - state.lastTouchTapX) < 24 &&
-        Math.abs(event.clientY - state.lastTouchTapY) < 24;
-
-      if (isDoubleTap) {
-        if (state.touchTapTimeoutId) {
-          clearTimeout(state.touchTapTimeoutId);
-          state.touchTapTimeoutId = null;
-        }
-        state.lastTouchTapAt = 0;
-        fitArtworkToViewport();
-        return;
-      }
-
-      state.lastTouchTapAt = now;
-      state.lastTouchTapX = event.clientX;
-      state.lastTouchTapY = event.clientY;
-      if (state.touchTapTimeoutId) {
-        clearTimeout(state.touchTapTimeoutId);
-      }
-      state.touchTapTimeoutId = setTimeout(() => {
-        paintAtEvent(event);
-        state.touchTapTimeoutId = null;
-      }, 260);
+      paintAtEvent(event);
     }
 
     function paintAtEvent(event) {
@@ -1317,7 +1308,7 @@ const state = {
       const stopPaint = event => {
         if (event?.pointerType === 'touch') {
           if (state.activePointers.size < 2 && state.touchPanPointerId === event.pointerId) {
-            handleTouchTapOrDoubleTap(event);
+            handleTouchTap(event);
           }
           untrackPointer(event);
           state.isPainting = false;
@@ -1330,12 +1321,17 @@ const state = {
       on(els.playCanvas, 'pointerdown', event => {
         trackPointer(event);
         if (event.pointerType === 'touch') {
-          if (state.activePointers.size === 1) {
+          if (state.activePointers.size === 1 && !state.dragFillLocked) {
             startTouchPan(event);
           }
           if (handlePinchZoom()) {
             state.isPainting = false;
             state.touchPanMoved = true;
+            return;
+          }
+          if (state.dragFillLocked) {
+            state.isPainting = true;
+            paintAtEvent(event);
             return;
           }
           state.isPainting = false;
@@ -1355,6 +1351,10 @@ const state = {
           if (handlePinchZoom()) {
             state.isPainting = false;
             state.touchPanMoved = true;
+            return;
+          }
+          if (state.dragFillLocked) {
+            if (state.isPainting) paintAtEvent(event);
             return;
           }
           handleTouchPan(event);
