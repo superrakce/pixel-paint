@@ -23,7 +23,20 @@ const state = {
       isPainting: false,
       activePointers: new Map(),
       pinchStartDistance: null,
-      pinchStartZoom: null
+      pinchStartZoom: null,
+      pinchStartCenter: null,
+      pinchStartScrollLeft: 0,
+      pinchStartScrollTop: 0,
+      touchPanPointerId: null,
+      touchPanStartX: 0,
+      touchPanStartY: 0,
+      touchPanStartScrollLeft: 0,
+      touchPanStartScrollTop: 0,
+      touchPanMoved: false,
+      touchTapTimeoutId: null,
+      lastTouchTapAt: 0,
+      lastTouchTapX: 0,
+      lastTouchTapY: 0
     };
 
     const els = {
@@ -62,6 +75,7 @@ const state = {
       galleryStatus: document.getElementById('galleryStatus'),
       playTitle: document.getElementById('playTitle'),
       playSubtitle: document.getElementById('playSubtitle'),
+      playTopbar: document.querySelector('.play-topbar'),
       playTopbarToggle: document.getElementById('playTopbarToggle'),
       clearPaintBtn: document.getElementById('clearPaintBtn'),
       backToGalleryBtn: document.getElementById('backToGalleryBtn'),
@@ -109,6 +123,7 @@ const state = {
       document.body.classList.toggle('draw-topbar-collapsed', collapsed);
       els.playTopbarToggle.textContent = collapsed ? '打開' : '收合';
       els.playTopbarToggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+      requestAnimationFrame(updateDrawTopbarOffset);
     }
 
     function toggleDrawTopbar() {
@@ -120,6 +135,14 @@ const state = {
       document.body.classList.toggle('draw-topbar-collapsed', collapsed);
       els.playTopbarToggle.textContent = collapsed ? '打開' : '收合';
       els.playTopbarToggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+      requestAnimationFrame(updateDrawTopbarOffset);
+    }
+
+    function updateDrawTopbarOffset() {
+      if (PAGE_MODE !== 'draw' || !els.playTopbar) return;
+      const topbarHeight = Math.ceil(els.playTopbar.getBoundingClientRect().height);
+      if (!topbarHeight) return;
+      document.body.style.setProperty('--draw-topbar-offset', `${topbarHeight}px`);
     }
 
     function showDrawEmpty(message) {
@@ -918,7 +941,10 @@ const state = {
       renderPaletteBar(artwork);
       updateSelectedColorText();
       showPlay();
-      requestAnimationFrame(() => fitArtworkToViewport());
+      requestAnimationFrame(() => {
+        updateDrawTopbarOffset();
+        fitArtworkToViewport();
+      });
     }
 
     async function resolveArtworkForDrawPage() {
@@ -1044,6 +1070,12 @@ const state = {
       if (!state.currentArtwork) return;
       state.zoom = getFittedZoom(state.currentArtwork);
       renderPlayCanvas();
+      if (els.playStage) {
+        requestAnimationFrame(() => {
+          els.playStage.scrollLeft = 0;
+          els.playStage.scrollTop = 0;
+        });
+      }
     }
 
     function renderPlayCanvas() {
@@ -1115,6 +1147,10 @@ const state = {
       if (state.activePointers.size < 2) {
         state.pinchStartDistance = null;
         state.pinchStartZoom = null;
+        state.pinchStartCenter = null;
+      }
+      if (state.touchPanPointerId === event.pointerId) {
+        state.touchPanPointerId = null;
       }
     }
 
@@ -1124,18 +1160,37 @@ const state = {
       return Math.hypot(a.x - b.x, a.y - b.y);
     }
 
+    function getPinchCenter() {
+      if (state.activePointers.size < 2) return null;
+      const [a, b] = Array.from(state.activePointers.values());
+      return {
+        x: (a.x + b.x) / 2,
+        y: (a.y + b.y) / 2
+      };
+    }
+
     function handlePinchZoom() {
+      if (!els.playStage) return false;
       const distance = getPinchDistance();
-      if (!distance) return false;
+      const center = getPinchCenter();
+      if (!distance || !center) return false;
+
+      const stageRect = els.playStage.getBoundingClientRect();
+      const centerX = center.x - stageRect.left;
+      const centerY = center.y - stageRect.top;
 
       if (state.pinchStartDistance == null) {
         state.pinchStartDistance = distance;
         state.pinchStartZoom = state.zoom;
+        state.pinchStartCenter = { x: centerX, y: centerY };
+        state.pinchStartScrollLeft = els.playStage.scrollLeft;
+        state.pinchStartScrollTop = els.playStage.scrollTop;
         return true;
       }
 
+      const zoomRatio = distance / state.pinchStartDistance;
       const nextZoom = clamp(
-        Math.round(state.pinchStartZoom * (distance / state.pinchStartDistance)),
+        Math.round(state.pinchStartZoom * zoomRatio),
         MIN_DRAW_ZOOM,
         MAX_DRAW_ZOOM
       );
@@ -1145,7 +1200,67 @@ const state = {
         renderPlayCanvas();
       }
 
+      const nextScrollLeft = ((state.pinchStartScrollLeft + state.pinchStartCenter.x) * (state.zoom / state.pinchStartZoom)) - centerX;
+      const nextScrollTop = ((state.pinchStartScrollTop + state.pinchStartCenter.y) * (state.zoom / state.pinchStartZoom)) - centerY;
+      els.playStage.scrollLeft = Math.max(0, nextScrollLeft);
+      els.playStage.scrollTop = Math.max(0, nextScrollTop);
+
       return true;
+    }
+
+    function startTouchPan(event) {
+      if (!els.playStage) return;
+      state.touchPanPointerId = event.pointerId;
+      state.touchPanStartX = event.clientX;
+      state.touchPanStartY = event.clientY;
+      state.touchPanStartScrollLeft = els.playStage.scrollLeft;
+      state.touchPanStartScrollTop = els.playStage.scrollTop;
+      state.touchPanMoved = false;
+    }
+
+    function handleTouchPan(event) {
+      if (!els.playStage || state.touchPanPointerId !== event.pointerId) return false;
+
+      const deltaX = event.clientX - state.touchPanStartX;
+      const deltaY = event.clientY - state.touchPanStartY;
+      if (Math.abs(deltaX) > 6 || Math.abs(deltaY) > 6) {
+        state.touchPanMoved = true;
+      }
+
+      els.playStage.scrollLeft = Math.max(0, state.touchPanStartScrollLeft - deltaX);
+      els.playStage.scrollTop = Math.max(0, state.touchPanStartScrollTop - deltaY);
+      return true;
+    }
+
+    function handleTouchTapOrDoubleTap(event) {
+      if (state.touchPanMoved) return;
+
+      const now = Date.now();
+      const isDoubleTap =
+        now - state.lastTouchTapAt < 320 &&
+        Math.abs(event.clientX - state.lastTouchTapX) < 24 &&
+        Math.abs(event.clientY - state.lastTouchTapY) < 24;
+
+      if (isDoubleTap) {
+        if (state.touchTapTimeoutId) {
+          clearTimeout(state.touchTapTimeoutId);
+          state.touchTapTimeoutId = null;
+        }
+        state.lastTouchTapAt = 0;
+        fitArtworkToViewport();
+        return;
+      }
+
+      state.lastTouchTapAt = now;
+      state.lastTouchTapX = event.clientX;
+      state.lastTouchTapY = event.clientY;
+      if (state.touchTapTimeoutId) {
+        clearTimeout(state.touchTapTimeoutId);
+      }
+      state.touchTapTimeoutId = setTimeout(() => {
+        paintAtEvent(event);
+        state.touchTapTimeoutId = null;
+      }, 260);
     }
 
     function paintAtEvent(event) {
@@ -1200,11 +1315,33 @@ const state = {
     function bindPlayCanvasEvents() {
       if (!els.playCanvas) return;
       const stopPaint = event => {
+        if (event?.pointerType === 'touch') {
+          if (state.activePointers.size < 2 && state.touchPanPointerId === event.pointerId) {
+            handleTouchTapOrDoubleTap(event);
+          }
+          untrackPointer(event);
+          state.isPainting = false;
+          return;
+        }
+
         state.isPainting = false;
         if (event) untrackPointer(event);
       };
       on(els.playCanvas, 'pointerdown', event => {
         trackPointer(event);
+        if (event.pointerType === 'touch') {
+          if (state.activePointers.size === 1) {
+            startTouchPan(event);
+          }
+          if (handlePinchZoom()) {
+            state.isPainting = false;
+            state.touchPanMoved = true;
+            return;
+          }
+          state.isPainting = false;
+          return;
+        }
+
         if (handlePinchZoom()) {
           state.isPainting = false;
           return;
@@ -1214,6 +1351,16 @@ const state = {
       });
       on(els.playCanvas, 'pointermove', event => {
         trackPointer(event);
+        if (event.pointerType === 'touch') {
+          if (handlePinchZoom()) {
+            state.isPainting = false;
+            state.touchPanMoved = true;
+            return;
+          }
+          handleTouchPan(event);
+          return;
+        }
+
         if (handlePinchZoom()) {
           state.isPainting = false;
           return;
@@ -1306,7 +1453,11 @@ const state = {
       syncBackgroundControls();
       updateBackgroundInfo();
       syncDrawTopbarState();
-      window.addEventListener('resize', syncDrawTopbarState);
+      requestAnimationFrame(updateDrawTopbarOffset);
+      window.addEventListener('resize', () => {
+        syncDrawTopbarState();
+        requestAnimationFrame(updateDrawTopbarOffset);
+      });
 
       if (PAGE_MODE === 'offline') {
         setGeneratedReady(false);
