@@ -83,6 +83,8 @@ const state = {
       paletteBar: document.getElementById('paletteBar'),
       pixelThumbCanvas: document.getElementById('pixelThumbCanvas'),
       progressThumbCanvas: document.getElementById('progressThumbCanvas'),
+      dragFillLockToggle: document.getElementById('dragFillLockToggle'),
+      dragFillLockCheck: document.getElementById('dragFillLockCheck'),
       selectedColorText: document.getElementById('selectedColorText'),
       zoomInBtn: document.getElementById('zoomInBtn'),
       zoomOutBtn: document.getElementById('zoomOutBtn')
@@ -937,6 +939,7 @@ const state = {
       if (els.playTitle) els.playTitle.textContent = artwork.name || '未命名圖片';
       if (els.playSubtitle) els.playSubtitle.textContent = `請先從下方選擇色塊，再點擊底圖上的對應編號。只有相同編號的區塊會被填色。`;
       renderPaletteBar(artwork);
+      syncDragFillLockToggle();
       updateSelectedColorText();
       showPlay();
       requestAnimationFrame(() => {
@@ -976,25 +979,6 @@ const state = {
       if (!els.paletteBar) return;
       els.paletteBar.innerHTML = '';
 
-      const lockToggle = document.createElement('button');
-      lockToggle.type = 'button';
-      lockToggle.className = 'palette-tool' + (state.dragFillLocked ? ' active' : '');
-      lockToggle.setAttribute('aria-pressed', state.dragFillLocked ? 'true' : 'false');
-      lockToggle.setAttribute('title', '鎖定拖曳填色');
-      lockToggle.innerHTML = `
-        <span class="palette-tool-icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24" focusable="false">
-            <path d="M17 9h-1V7a4 4 0 0 0-8 0v2H7a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2Zm-6 0V7a2 2 0 1 1 4 0v2h-4Zm1 4h2v4h-2v-4Z"></path>
-          </svg>
-        </span>
-        <span class="palette-tool-check" aria-hidden="true">${state.dragFillLocked ? '✓' : ''}</span>
-      `;
-      lockToggle.addEventListener('click', () => {
-        state.dragFillLocked = !state.dragFillLocked;
-        renderPaletteBar(artwork);
-      });
-      els.paletteBar.appendChild(lockToggle);
-
       const bucketToggle = document.createElement('button');
       bucketToggle.type = 'button';
       bucketToggle.className = 'palette-tool' + (state.bucketFillEnabled ? ' active' : '');
@@ -1029,6 +1013,15 @@ const state = {
         });
         els.paletteBar.appendChild(swatch);
       });
+    }
+
+    function syncDragFillLockToggle() {
+      if (!els.dragFillLockToggle) return;
+      els.dragFillLockToggle.classList.toggle('active', state.dragFillLocked);
+      els.dragFillLockToggle.setAttribute('aria-pressed', state.dragFillLocked ? 'true' : 'false');
+      if (els.dragFillLockCheck) {
+        els.dragFillLockCheck.textContent = state.dragFillLocked ? '✓' : '';
+      }
     }
 
     function updateSelectedColorText() {
@@ -1436,6 +1429,10 @@ const state = {
       on(els.clearPaintBtn, 'click', clearPainting);
       on(els.exportPaintBtn, 'click', exportPainting);
       on(els.playTopbarToggle, 'click', toggleDrawTopbar);
+      on(els.dragFillLockToggle, 'click', () => {
+        state.dragFillLocked = !state.dragFillLocked;
+        syncDragFillLockToggle();
+      });
       on(els.zoomInBtn, 'click', () => {
         state.zoom = clamp(state.zoom + 4, MIN_DRAW_ZOOM, MAX_DRAW_ZOOM);
         renderPlayCanvas();
