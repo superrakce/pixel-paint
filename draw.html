@@ -12,11 +12,14 @@
   <div class="app-shell">
     <section id="playView" class="panel hidden">
       <div class="play-topbar">
-        <div>
-          <div class="section-title" id="playTitle">開始繪圖</div>
-          <div class="section-desc" id="playSubtitle">請先從下方選擇色塊，再點擊底圖上的對應編號。</div>
+        <div class="play-topbar-main">
+          <div>
+            <div class="section-title" id="playTitle">開始繪圖</div>
+            <div class="section-desc" id="playSubtitle">請先從下方選擇色塊，再點擊底圖上的對應編號。</div>
+          </div>
+          <button class="btn play-topbar-toggle" id="playTopbarToggle" type="button" aria-expanded="true">收合</button>
         </div>
-        <div class="toolbar">
+        <div class="toolbar play-topbar-actions">
           <a class="btn" href="./paint.html">返回圖片清單</a>
           <a class="btn" href="./index.html">返回首頁</a>
           <button class="btn danger" id="clearPaintBtn">清除重繪</button>
@@ -38,6 +41,14 @@
         <div class="zoom-controls">
           <button class="btn zoom-btn" id="zoomInBtn">＋</button>
           <button class="btn zoom-btn" id="zoomOutBtn">－</button>
+          <div class="zoom-thumbs">
+            <div class="palette-thumb-frame">
+              <canvas id="pixelThumbCanvas" class="palette-thumb-canvas" title="像素圖縮圖"></canvas>
+            </div>
+            <div class="palette-thumb-frame">
+              <canvas id="progressThumbCanvas" class="palette-thumb-canvas" title="目前完成縮圖"></canvas>
+            </div>
+          </div>
         </div>
       </div>
     </section>

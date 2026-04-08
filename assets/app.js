@@ -1,5 +1,7 @@
 const PAGE_MODE = document.body?.dataset?.page || 'all';
 const SELECTED_ARTWORK_STORAGE_KEY = 'pixel-paint-selected-artwork';
+const MIN_DRAW_ZOOM = 2;
+const MAX_DRAW_ZOOM = 64;
 
 function on(el, eventName, handler, options) {
   if (el) el.addEventListener(eventName, handler, options);
@@ -16,8 +18,12 @@ const state = {
       paintedCells: [],
       selectedPaletteIndex: null,
       bucketFillEnabled: false,
+      drawTopbarCollapsed: null,
       zoom: 24,
-      isPainting: false
+      isPainting: false,
+      activePointers: new Map(),
+      pinchStartDistance: null,
+      pinchStartZoom: null
     };
 
     const els = {
@@ -56,12 +62,16 @@ const state = {
       galleryStatus: document.getElementById('galleryStatus'),
       playTitle: document.getElementById('playTitle'),
       playSubtitle: document.getElementById('playSubtitle'),
+      playTopbarToggle: document.getElementById('playTopbarToggle'),
       clearPaintBtn: document.getElementById('clearPaintBtn'),
       backToGalleryBtn: document.getElementById('backToGalleryBtn'),
       exportPaintBtn: document.getElementById('exportPaintBtn'),
       playCanvas: document.getElementById('playCanvas'),
       playStage: document.getElementById('playStage'),
+      stageInner: document.querySelector('.stage-inner'),
       paletteBar: document.getElementById('paletteBar'),
+      pixelThumbCanvas: document.getElementById('pixelThumbCanvas'),
+      progressThumbCanvas: document.getElementById('progressThumbCanvas'),
       selectedColorText: document.getElementById('selectedColorText'),
       zoomInBtn: document.getElementById('zoomInBtn'),
       zoomOutBtn: document.getElementById('zoomOutBtn')
@@ -85,6 +95,31 @@ const state = {
       if (els.galleryView) els.galleryView.classList.add('hidden');
       if (els.playView) els.playView.classList.remove('hidden');
       if (els.drawEmpty) els.drawEmpty.classList.add('hidden');
+    }
+
+    function syncDrawTopbarState() {
+      if (PAGE_MODE !== 'draw' || !els.playTopbarToggle) return;
+      const compact = window.matchMedia('(max-width: 980px)').matches;
+      if (!compact) {
+        state.drawTopbarCollapsed = false;
+      } else if (state.drawTopbarCollapsed == null) {
+        state.drawTopbarCollapsed = true;
+      }
+      const collapsed = Boolean(state.drawTopbarCollapsed);
+      document.body.classList.toggle('draw-topbar-collapsed', collapsed);
+      els.playTopbarToggle.textContent = collapsed ? '打開' : '收合';
+      els.playTopbarToggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    }
+
+    function toggleDrawTopbar() {
+      if (PAGE_MODE !== 'draw' || !els.playTopbarToggle) return;
+      const compact = window.matchMedia('(max-width: 980px)').matches;
+      if (!compact) return;
+      state.drawTopbarCollapsed = !document.body.classList.contains('draw-topbar-collapsed');
+      const collapsed = state.drawTopbarCollapsed;
+      document.body.classList.toggle('draw-topbar-collapsed', collapsed);
+      els.playTopbarToggle.textContent = collapsed ? '打開' : '收合';
+      els.playTopbarToggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
     }
 
     function showDrawEmpty(message) {
@@ -869,7 +904,7 @@ const state = {
       }
 
       state.currentArtwork = artwork;
-      state.zoom = clamp(artwork.exportCellSize || 18, 16, 40);
+      state.zoom = clamp(artwork.exportCellSize || 18, MIN_DRAW_ZOOM, MAX_DRAW_ZOOM);
       state.selectedPaletteIndex = 0;
       state.bucketFillEnabled = false;
 
@@ -882,8 +917,8 @@ const state = {
       if (els.playSubtitle) els.playSubtitle.textContent = `請先從下方選擇色塊，再點擊底圖上的對應編號。只有相同編號的區塊會被填色。`;
       renderPaletteBar(artwork);
       updateSelectedColorText();
-      renderPlayCanvas();
       showPlay();
+      requestAnimationFrame(() => fitArtworkToViewport());
     }
 
     async function resolveArtworkForDrawPage() {
@@ -957,6 +992,60 @@ const state = {
       if (!els.selectedColorText) return;
     }
 
+    function renderPaletteThumbs() {
+      if (!state.currentArtwork) return;
+
+      const thumbOptions = {
+        showGrid: false,
+        showNumbers: false,
+        cellSize: 1,
+        whiteBackground: true
+      };
+
+      if (els.pixelThumbCanvas) {
+        renderPixelArt(els.pixelThumbCanvas, state.currentArtwork, {
+          ...thumbOptions,
+          showColors: true
+        });
+      }
+
+      if (els.progressThumbCanvas) {
+        renderPixelArt(els.progressThumbCanvas, state.currentArtwork, {
+          ...thumbOptions,
+          showColors: false,
+          paintedCells: state.paintedCells
+        });
+      }
+    }
+
+    function getFittedZoom(artwork) {
+      if (!artwork || !els.playStage || !els.stageInner) {
+        return clamp(artwork?.exportCellSize || 18, MIN_DRAW_ZOOM, MAX_DRAW_ZOOM);
+      }
+
+      const stageWidth = els.playStage.clientWidth;
+      const stageHeight = els.playStage.clientHeight;
+      if (!stageWidth || !stageHeight) {
+        return clamp(artwork.exportCellSize || 18, MIN_DRAW_ZOOM, MAX_DRAW_ZOOM);
+      }
+
+      const stageStyle = window.getComputedStyle(els.stageInner);
+      const paddingX = (parseFloat(stageStyle.paddingLeft) || 0) + (parseFloat(stageStyle.paddingRight) || 0);
+      const paddingY = (parseFloat(stageStyle.paddingTop) || 0) + (parseFloat(stageStyle.paddingBottom) || 0);
+      const availableWidth = Math.max(1, stageWidth - paddingX);
+      const availableHeight = Math.max(1, stageHeight - paddingY);
+      const zoomFromWidth = Math.floor(availableWidth / artwork.width);
+      const zoomFromHeight = Math.floor(availableHeight / artwork.height);
+
+      return clamp(Math.min(zoomFromWidth, zoomFromHeight), MIN_DRAW_ZOOM, MAX_DRAW_ZOOM);
+    }
+
+    function fitArtworkToViewport() {
+      if (!state.currentArtwork) return;
+      state.zoom = getFittedZoom(state.currentArtwork);
+      renderPlayCanvas();
+    }
+
     function renderPlayCanvas() {
       if (!state.currentArtwork || !els.playCanvas) return;
       renderPixelArt(els.playCanvas, state.currentArtwork, {
@@ -967,6 +1056,7 @@ const state = {
         cellSize: state.zoom,
         numberAlpha: 0.92
       });
+      renderPaletteThumbs();
     }
 
     function savePaintingProgress() {
@@ -1009,6 +1099,53 @@ const state = {
       }
 
       return changed;
+    }
+
+    function trackPointer(event) {
+      if (event.pointerType !== 'touch') return;
+      state.activePointers.set(event.pointerId, {
+        x: event.clientX,
+        y: event.clientY
+      });
+    }
+
+    function untrackPointer(event) {
+      if (event.pointerType !== 'touch') return;
+      state.activePointers.delete(event.pointerId);
+      if (state.activePointers.size < 2) {
+        state.pinchStartDistance = null;
+        state.pinchStartZoom = null;
+      }
+    }
+
+    function getPinchDistance() {
+      if (state.activePointers.size < 2) return null;
+      const [a, b] = Array.from(state.activePointers.values());
+      return Math.hypot(a.x - b.x, a.y - b.y);
+    }
+
+    function handlePinchZoom() {
+      const distance = getPinchDistance();
+      if (!distance) return false;
+
+      if (state.pinchStartDistance == null) {
+        state.pinchStartDistance = distance;
+        state.pinchStartZoom = state.zoom;
+        return true;
+      }
+
+      const nextZoom = clamp(
+        Math.round(state.pinchStartZoom * (distance / state.pinchStartDistance)),
+        MIN_DRAW_ZOOM,
+        MAX_DRAW_ZOOM
+      );
+
+      if (nextZoom !== state.zoom) {
+        state.zoom = nextZoom;
+        renderPlayCanvas();
+      }
+
+      return true;
     }
 
     function paintAtEvent(event) {
@@ -1062,12 +1199,25 @@ const state = {
 
     function bindPlayCanvasEvents() {
       if (!els.playCanvas) return;
-      const stopPaint = () => { state.isPainting = false; };
+      const stopPaint = event => {
+        state.isPainting = false;
+        if (event) untrackPointer(event);
+      };
       on(els.playCanvas, 'pointerdown', event => {
+        trackPointer(event);
+        if (handlePinchZoom()) {
+          state.isPainting = false;
+          return;
+        }
         state.isPainting = true;
         paintAtEvent(event);
       });
       on(els.playCanvas, 'pointermove', event => {
+        trackPointer(event);
+        if (handlePinchZoom()) {
+          state.isPainting = false;
+          return;
+        }
         if (state.isPainting) paintAtEvent(event);
       });
       window.addEventListener('pointerup', stopPaint);
@@ -1138,12 +1288,13 @@ const state = {
       on(els.backToGalleryBtn, 'click', showGallery);
       on(els.clearPaintBtn, 'click', clearPainting);
       on(els.exportPaintBtn, 'click', exportPainting);
+      on(els.playTopbarToggle, 'click', toggleDrawTopbar);
       on(els.zoomInBtn, 'click', () => {
-        state.zoom = clamp(state.zoom + 4, 8, 64);
+        state.zoom = clamp(state.zoom + 4, MIN_DRAW_ZOOM, MAX_DRAW_ZOOM);
         renderPlayCanvas();
       });
       on(els.zoomOutBtn, 'click', () => {
-        state.zoom = clamp(state.zoom - 4, 8, 64);
+        state.zoom = clamp(state.zoom - 4, MIN_DRAW_ZOOM, MAX_DRAW_ZOOM);
         renderPlayCanvas();
       });
 
@@ -1154,6 +1305,8 @@ const state = {
       attachEvents();
       syncBackgroundControls();
       updateBackgroundInfo();
+      syncDrawTopbarState();
+      window.addEventListener('resize', syncDrawTopbarState);
 
       if (PAGE_MODE === 'offline') {
         setGeneratedReady(false);
