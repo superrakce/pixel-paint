@@ -1,5 +1,6 @@
 {
   "files": [
-    "./data/json/demo-smile.json"
+    "./data/json/demo-smile.json",
+    "./data/json/demo-smile2.json"
   ]
 }
