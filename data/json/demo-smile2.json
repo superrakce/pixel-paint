@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "name": "demo-smile",
+  "name": "demo-smile2",
   "width": 16,
   "height": 16,
   "exportCellSize": 18,
@@ -318,8 +318,9 @@
     "createdAt": "2026-04-07T00:00:00.000Z",
     "sourceWidth": 128,
     "sourceHeight": 128,
-    "removeBackground": true,
-    "backgroundTolerance": 32,
-    "backgroundColor": "#FFF6E9"
+    "transparentCells": 136,
+    "hasTransparency": true,
+    "backgroundRemoved": true,
+    "backgroundTolerance": 32
   }
 }

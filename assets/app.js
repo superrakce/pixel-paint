@@ -1,4 +1,5 @@
 const PAGE_MODE = document.body?.dataset?.page || 'all';
+const SELECTED_ARTWORK_STORAGE_KEY = 'pixel-paint-selected-artwork';
 
 function on(el, eventName, handler, options) {
   if (el) el.addEventListener(eventName, handler, options);
@@ -14,7 +15,7 @@ const state = {
       currentArtwork: null,
       paintedCells: [],
       selectedPaletteIndex: null,
-      forceFill: false,
+      bucketFillEnabled: false,
       zoom: 24,
       isPainting: false
     };
@@ -26,6 +27,7 @@ const state = {
       onlineView: document.getElementById('onlineView'),
       galleryView: document.getElementById('galleryView'),
       playView: document.getElementById('playView'),
+      drawEmpty: document.getElementById('drawEmpty'),
       imageName: document.getElementById('imageName'),
       imageFile: document.getElementById('imageFile'),
       gridWidth: document.getElementById('gridWidth'),
@@ -60,7 +62,6 @@ const state = {
       playCanvas: document.getElementById('playCanvas'),
       playStage: document.getElementById('playStage'),
       paletteBar: document.getElementById('paletteBar'),
-      forceFillToggle: document.getElementById('forceFillToggle'),
       selectedColorText: document.getElementById('selectedColorText'),
       zoomInBtn: document.getElementById('zoomInBtn'),
       zoomOutBtn: document.getElementById('zoomOutBtn')
@@ -77,11 +78,23 @@ const state = {
     function showGallery() {
       if (els.galleryView) els.galleryView.classList.remove('hidden');
       if (els.playView) els.playView.classList.add('hidden');
+      if (els.drawEmpty) els.drawEmpty.classList.add('hidden');
     }
 
     function showPlay() {
       if (els.galleryView) els.galleryView.classList.add('hidden');
       if (els.playView) els.playView.classList.remove('hidden');
+      if (els.drawEmpty) els.drawEmpty.classList.add('hidden');
+    }
+
+    function showDrawEmpty(message) {
+      if (els.galleryView) els.galleryView.classList.add('hidden');
+      if (els.playView) els.playView.classList.add('hidden');
+      if (els.drawEmpty) els.drawEmpty.classList.remove('hidden');
+      if (message && els.drawEmpty) {
+        const desc = els.drawEmpty.querySelector('.section-desc');
+        if (desc) desc.textContent = message;
+      }
     }
 
     function clamp(value, min, max) {
@@ -90,6 +103,55 @@ const state = {
 
     function sanitizeFileName(name) {
       return (name || 'untitled').trim().replace(/[\\/:*?"<>|]/g, '-');
+    }
+
+    function isValidArtwork(artwork) {
+      return Boolean(
+        artwork &&
+        Number.isInteger(artwork.width) &&
+        Number.isInteger(artwork.height) &&
+        Array.isArray(artwork.palette) &&
+        Array.isArray(artwork.cells) &&
+        artwork.cells.length === artwork.width * artwork.height
+      );
+    }
+
+    function cloneArtworkForStorage(artwork) {
+      return {
+        version: artwork.version ?? 1,
+        name: artwork.name || artwork.__fileName || 'untitled',
+        width: artwork.width,
+        height: artwork.height,
+        exportCellSize: artwork.exportCellSize || 18,
+        palette: artwork.palette,
+        cells: artwork.cells,
+        meta: artwork.meta || {},
+        __fileName: artwork.__fileName,
+        __downloadUrl: artwork.__downloadUrl
+      };
+    }
+
+    function persistSelectedArtwork(artwork) {
+      try {
+        sessionStorage.setItem(
+          SELECTED_ARTWORK_STORAGE_KEY,
+          JSON.stringify(cloneArtworkForStorage(artwork))
+        );
+      } catch (error) {
+        console.error('儲存選取圖片失敗', error);
+      }
+    }
+
+    function readSelectedArtwork() {
+      try {
+        const raw = sessionStorage.getItem(SELECTED_ARTWORK_STORAGE_KEY);
+        if (!raw) return null;
+        const artwork = JSON.parse(raw);
+        return isValidArtwork(artwork) ? artwork : null;
+      } catch (error) {
+        console.error('讀取選取圖片失敗', error);
+        return null;
+      }
     }
 
     function hexFromRgb(rgb) {
@@ -523,12 +585,16 @@ const state = {
           ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
 
           if (showGrid) {
+            const hideGrid = paintedCells && paintedCells[idx] != null;
+            if (hideGrid) continue;
             ctx.strokeStyle = '#D7DEE8';
             ctx.lineWidth = Math.max(1, Math.floor(cellSize / 18));
             ctx.strokeRect(x * cellSize, y * cellSize, cellSize, cellSize);
           }
 
           if (showNumbers) {
+            const hideNumber = paintedCells && paintedCells[idx] != null;
+            if (hideNumber) continue;
             ctx.save();
             ctx.globalAlpha = numberAlpha;
             ctx.fillStyle = '#243042';
@@ -783,12 +849,29 @@ const state = {
       return `pixel-paint-progress:${artwork.name}`;
     }
 
+    function buildDrawPageUrl(artwork) {
+      const url = new URL('./draw.html', window.location.href);
+      if (artwork.__downloadUrl) {
+        url.searchParams.set('src', artwork.__downloadUrl);
+      }
+      return url.toString();
+    }
+
+    function openArtworkInDrawPage(artwork) {
+      persistSelectedArtwork(artwork);
+      window.location.href = buildDrawPageUrl(artwork);
+    }
+
     function startPainting(artwork) {
+      if (PAGE_MODE === 'paint') {
+        openArtworkInDrawPage(artwork);
+        return;
+      }
+
       state.currentArtwork = artwork;
       state.zoom = clamp(artwork.exportCellSize || 18, 16, 40);
       state.selectedPaletteIndex = 0;
-      state.forceFill = false;
-      if (els.forceFillToggle) els.forceFillToggle.checked = false;
+      state.bucketFillEnabled = false;
 
       const stored = localStorage.getItem(progressKey(artwork));
       state.paintedCells = stored
@@ -796,23 +879,70 @@ const state = {
         : new Array(artwork.cells.length).fill(null);
 
       if (els.playTitle) els.playTitle.textContent = artwork.name || '未命名圖片';
-      if (els.playSubtitle) els.playSubtitle.textContent = `請先從下方選擇色塊，再點擊底圖上的對應編號。相同編號才會填色，除非已勾選「強制填色」。`;
+      if (els.playSubtitle) els.playSubtitle.textContent = `請先從下方選擇色塊，再點擊底圖上的對應編號。只有相同編號的區塊會被填色。`;
       renderPaletteBar(artwork);
       updateSelectedColorText();
       renderPlayCanvas();
       showPlay();
     }
 
+    async function resolveArtworkForDrawPage() {
+      const params = new URLSearchParams(window.location.search);
+      const src = params.get('src');
+
+      if (src) {
+        try {
+          const res = await fetch(src);
+          if (!res.ok) {
+            throw new Error(`圖片資料讀取失敗：${res.status}`);
+          }
+          const artwork = await res.json();
+          artwork.__downloadUrl = src;
+          if (!artwork.__fileName) {
+            artwork.__fileName = src.split('/').pop()?.split('?')[0] || '';
+          }
+          if (isValidArtwork(artwork)) {
+            persistSelectedArtwork(artwork);
+            return artwork;
+          }
+        } catch (error) {
+          console.error('draw 頁面載入指定圖片失敗', error);
+        }
+      }
+
+      return readSelectedArtwork();
+    }
+
     function renderPaletteBar(artwork) {
       if (!els.paletteBar) return;
       els.paletteBar.innerHTML = '';
+
+      const bucketToggle = document.createElement('button');
+      bucketToggle.type = 'button';
+      bucketToggle.className = 'palette-tool' + (state.bucketFillEnabled ? ' active' : '');
+      bucketToggle.setAttribute('aria-pressed', state.bucketFillEnabled ? 'true' : 'false');
+      bucketToggle.setAttribute('title', '油漆桶連續填色');
+      bucketToggle.innerHTML = `
+        <span class="palette-tool-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" focusable="false">
+            <path d="M14.6 3.8 20.2 9.4 9.4 20.2 3.8 14.6 14.6 3.8Zm0 2.8-8 8 2.8 2.8 8-8-2.8-2.8ZM19.8 14.5c.9 1 1.5 2 1.5 3 0 1.9-1.6 3.5-3.5 3.5s-3.5-1.6-3.5-3.5c0-1 .6-2 1.5-3l.7-.8.7.8c.3.4.6.8.9 1.2.3-.4.6-.8.9-1.2l.8-.8Z"></path>
+          </svg>
+        </span>
+        <span class="palette-tool-check" aria-hidden="true">${state.bucketFillEnabled ? '✓' : ''}</span>
+      `;
+      bucketToggle.addEventListener('click', () => {
+        state.bucketFillEnabled = !state.bucketFillEnabled;
+        renderPaletteBar(artwork);
+      });
+      els.paletteBar.appendChild(bucketToggle);
+
       artwork.palette.forEach((item, index) => {
         const swatch = document.createElement('button');
         swatch.className = 'swatch' + (state.selectedPaletteIndex === index ? ' active' : '');
         swatch.innerHTML = `
-          <div class="swatch-color" style="background:${item.hex};"></div>
-          <div class="swatch-no">${item.id}</div>
-          <div class="swatch-name">${item.hex}</div>
+          <div class="swatch-color" style="background:${item.hex};">
+            <span class="swatch-no-badge">${item.id}</span>
+          </div>
         `;
         swatch.addEventListener('click', () => {
           state.selectedPaletteIndex = index;
@@ -825,12 +955,6 @@ const state = {
 
     function updateSelectedColorText() {
       if (!els.selectedColorText) return;
-      if (!state.currentArtwork || state.selectedPaletteIndex == null) {
-        els.selectedColorText.textContent = '尚未選擇色塊';
-        return;
-      }
-      const item = state.currentArtwork.palette[state.selectedPaletteIndex];
-      els.selectedColorText.textContent = `目前顏色：編號 ${item.id} / ${item.hex}`;
     }
 
     function renderPlayCanvas() {
@@ -850,6 +974,43 @@ const state = {
       localStorage.setItem(progressKey(state.currentArtwork), JSON.stringify(state.paintedCells));
     }
 
+    function fillConnectedCells(startIndex, paletteIndex) {
+      if (!state.currentArtwork) return false;
+
+      const expected = state.currentArtwork.cells[startIndex];
+      if (expected == null || expected < 0 || expected !== paletteIndex) return false;
+
+      const width = state.currentArtwork.width;
+      const height = state.currentArtwork.height;
+      const total = width * height;
+      const visited = new Uint8Array(total);
+      const stack = [startIndex];
+      let changed = false;
+
+      while (stack.length) {
+        const idx = stack.pop();
+        if (visited[idx]) continue;
+        visited[idx] = 1;
+
+        if (state.currentArtwork.cells[idx] !== expected) continue;
+
+        if (state.paintedCells[idx] !== paletteIndex) {
+          state.paintedCells[idx] = paletteIndex;
+          changed = true;
+        }
+
+        const x = idx % width;
+        const y = (idx - x) / width;
+
+        if (x > 0) stack.push(idx - 1);
+        if (x < width - 1) stack.push(idx + 1);
+        if (y > 0) stack.push(idx - width);
+        if (y < height - 1) stack.push(idx + width);
+      }
+
+      return changed;
+    }
+
     function paintAtEvent(event) {
       if (!state.currentArtwork || state.selectedPaletteIndex == null) return;
       const rect = els.playCanvas.getBoundingClientRect();
@@ -862,11 +1023,18 @@ const state = {
       const idx = cellY * state.currentArtwork.width + cellX;
       const expected = state.currentArtwork.cells[idx];
       if (expected == null || expected < 0) return;
-      const canPaint = state.forceFill || expected === state.selectedPaletteIndex;
+      const canPaint = expected === state.selectedPaletteIndex;
       if (!canPaint) return;
 
-      if (state.paintedCells[idx] !== state.selectedPaletteIndex) {
-        state.paintedCells[idx] = state.selectedPaletteIndex;
+      const changed = state.bucketFillEnabled
+        ? fillConnectedCells(idx, state.selectedPaletteIndex)
+        : (() => {
+          if (state.paintedCells[idx] === state.selectedPaletteIndex) return false;
+          state.paintedCells[idx] = state.selectedPaletteIndex;
+          return true;
+        })();
+
+      if (changed) {
         renderPlayCanvas();
         savePaintingProgress();
       }
@@ -970,9 +1138,6 @@ const state = {
       on(els.backToGalleryBtn, 'click', showGallery);
       on(els.clearPaintBtn, 'click', clearPainting);
       on(els.exportPaintBtn, 'click', exportPainting);
-      on(els.forceFillToggle, 'change', e => {
-        state.forceFill = !!e.target.checked;
-      });
       on(els.zoomInBtn, 'click', () => {
         state.zoom = clamp(state.zoom + 4, 8, 64);
         renderPlayCanvas();
@@ -999,6 +1164,22 @@ const state = {
         loadRepoConfigToForm();
         showGallery();
         loadGallery().catch(console.error);
+        return;
+      }
+
+      if (PAGE_MODE === 'draw') {
+        resolveArtworkForDrawPage()
+          .then(artwork => {
+            if (!artwork) {
+              showDrawEmpty('請先回到圖片清單頁選一張圖片，再進入這個塗鴉頁。');
+              return;
+            }
+            startPainting(artwork);
+          })
+          .catch(error => {
+            console.error(error);
+            showDrawEmpty('圖片資料載入失敗，請回到圖片清單重新選擇。');
+          });
         return;
       }
 

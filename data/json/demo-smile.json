@@ -5,10 +5,10 @@
   "height": 8,
   "exportCellSize": 24,
   "palette": [
-    { "id": 1, "hex": "#F6B73C", "rgb": [246, 183, 60], "count": 36 },
-    { "id": 2, "hex": "#D97A00", "rgb": [217, 122, 0], "count": 6 },
-    { "id": 3, "hex": "#FFFFFF", "rgb": [255, 255, 255], "count": 6 },
-    { "id": 4, "hex": "#F25F5C", "rgb": [242, 95, 92], "count": 4 }
+    { "id": 1, "hex": "#F6B73C", "rgb": [246, 183, 60], "count": 30 },
+    { "id": 2, "hex": "#D97A00", "rgb": [217, 122, 0], "count": 2 },
+    { "id": 3, "hex": "#FFFFFF", "rgb": [255, 255, 255], "count": 2 },
+    { "id": 4, "hex": "#F25F5C", "rgb": [242, 95, 92], "count": 2 }
   ],
   "cells": [
     null, null, null, null, null, null, null, null,
