@@ -6,7 +6,9 @@ function on(el, eventName, handler, options) {
 
 const state = {
       sourceImage: null,
+      processedSourceImage: null,
       sourceName: '',
+      backgroundStats: null,
       generated: null,
       gallery: [],
       currentArtwork: null,
@@ -29,6 +31,9 @@ const state = {
       gridWidth: document.getElementById('gridWidth'),
       paletteCount: document.getElementById('paletteCount'),
       exportCellSize: document.getElementById('exportCellSize'),
+      removeBackgroundToggle: document.getElementById('removeBackgroundToggle'),
+      backgroundTolerance: document.getElementById('backgroundTolerance'),
+      backgroundInfo: document.getElementById('backgroundInfo'),
       generateBtn: document.getElementById('generateBtn'),
       loadDemoBtn: document.getElementById('loadDemoBtn'),
       exportJsonBtn: document.getElementById('exportJsonBtn'),
@@ -115,6 +120,195 @@ const state = {
       ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
     }
 
+    function hasTransparentCells(artwork) {
+      return Boolean(
+        artwork?.meta?.hasTransparency ||
+        artwork?.cells?.some(cell => cell == null || cell < 0)
+      );
+    }
+
+    function getRemoveBackgroundSettings() {
+      return {
+        enabled: Boolean(els.removeBackgroundToggle?.checked),
+        tolerance: clamp(parseInt(els.backgroundTolerance?.value, 10) || 28, 0, 120)
+      };
+    }
+
+    function syncBackgroundControls() {
+      if (els.backgroundTolerance) {
+        els.backgroundTolerance.disabled = !els.removeBackgroundToggle?.checked;
+      }
+    }
+
+    function updateBackgroundInfo() {
+      if (!els.backgroundInfo) return;
+      const settings = getRemoveBackgroundSettings();
+      if (!state.sourceImage) {
+        els.backgroundInfo.textContent = settings.enabled
+          ? '匯入圖片後，會先在原圖預覽中顯示去背結果。'
+          : '未啟用去背，會保留原圖背景。';
+        return;
+      }
+
+      if (!settings.enabled) {
+        els.backgroundInfo.textContent = '未啟用去背，會保留原圖背景。';
+        return;
+      }
+
+      const stats = state.backgroundStats;
+      if (!stats) {
+        els.backgroundInfo.textContent = `已啟用去背，容差 ${settings.tolerance}。`;
+        return;
+      }
+
+      const percent = stats.totalPixels
+        ? ((stats.removedPixels / stats.totalPixels) * 100).toFixed(1)
+        : '0.0';
+      els.backgroundInfo.textContent = `已移除 ${stats.removedPixels} 個背景像素（${percent}%），容差 ${stats.tolerance}。`;
+    }
+
+    function sampleCornerColors(data, width, height) {
+      const radius = clamp(Math.floor(Math.min(width, height) * 0.04), 1, 6);
+      const corners = [
+        [0, 0],
+        [width - 1, 0],
+        [0, height - 1],
+        [width - 1, height - 1]
+      ];
+
+      return corners.map(([cornerX, cornerY]) => {
+        let sumR = 0;
+        let sumG = 0;
+        let sumB = 0;
+        let count = 0;
+
+        for (let y = Math.max(0, cornerY - radius); y <= Math.min(height - 1, cornerY + radius); y++) {
+          for (let x = Math.max(0, cornerX - radius); x <= Math.min(width - 1, cornerX + radius); x++) {
+            const offset = (y * width + x) * 4;
+            if (data[offset + 3] <= 10) continue;
+            sumR += data[offset];
+            sumG += data[offset + 1];
+            sumB += data[offset + 2];
+            count += 1;
+          }
+        }
+
+        if (!count) return [255, 255, 255];
+
+        return [
+          Math.round(sumR / count),
+          Math.round(sumG / count),
+          Math.round(sumB / count)
+        ];
+      });
+    }
+
+    function matchesBackgroundAtOffset(data, offset, referenceColors, toleranceSq) {
+      if (data[offset + 3] <= 10) return true;
+      const pixel = [data[offset], data[offset + 1], data[offset + 2]];
+      return referenceColors.some(color => distanceSq(pixel, color) <= toleranceSq);
+    }
+
+    function removeBackgroundFromImage(image, tolerance) {
+      const safeTolerance = clamp(parseInt(tolerance, 10) || 28, 0, 120);
+      const canvas = document.createElement('canvas');
+      canvas.width = image.width;
+      canvas.height = image.height;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const { data } = imageData;
+      const width = canvas.width;
+      const height = canvas.height;
+      const totalPixels = width * height;
+      const visited = new Uint8Array(totalPixels);
+      const queue = new Int32Array(totalPixels);
+      const toleranceSq = safeTolerance ** 2;
+      const referenceColors = sampleCornerColors(data, width, height);
+      let head = 0;
+      let tail = 0;
+      let removedPixels = 0;
+
+      function enqueue(x, y) {
+        if (x < 0 || y < 0 || x >= width || y >= height) return;
+        const index = y * width + x;
+        if (visited[index]) return;
+        visited[index] = 1;
+        const offset = index * 4;
+        if (!matchesBackgroundAtOffset(data, offset, referenceColors, toleranceSq)) return;
+        queue[tail++] = index;
+      }
+
+      for (let x = 0; x < width; x++) {
+        enqueue(x, 0);
+        enqueue(x, height - 1);
+      }
+      for (let y = 1; y < height - 1; y++) {
+        enqueue(0, y);
+        enqueue(width - 1, y);
+      }
+
+      while (head < tail) {
+        const index = queue[head++];
+        const offset = index * 4;
+        if (data[offset + 3] !== 0) {
+          removedPixels += 1;
+          data[offset + 3] = 0;
+        }
+
+        const x = index % width;
+        const y = (index - x) / width;
+        enqueue(x - 1, y);
+        enqueue(x + 1, y);
+        enqueue(x, y - 1);
+        enqueue(x, y + 1);
+      }
+
+      ctx.putImageData(imageData, 0, 0);
+
+      return {
+        enabled: true,
+        tolerance: safeTolerance,
+        removedPixels,
+        totalPixels,
+        canvas
+      };
+    }
+
+    function refreshSourcePreview(options = {}) {
+      const { regenerate = false } = options;
+      syncBackgroundControls();
+
+      if (!state.sourceImage) {
+        state.processedSourceImage = null;
+        state.backgroundStats = null;
+        updateBackgroundInfo();
+        return;
+      }
+
+      const settings = getRemoveBackgroundSettings();
+      if (settings.enabled) {
+        state.backgroundStats = removeBackgroundFromImage(state.sourceImage, settings.tolerance);
+        state.processedSourceImage = state.backgroundStats.canvas;
+      } else {
+        state.backgroundStats = {
+          enabled: false,
+          tolerance: settings.tolerance,
+          removedPixels: 0,
+          totalPixels: state.sourceImage.width * state.sourceImage.height
+        };
+        state.processedSourceImage = state.sourceImage;
+      }
+
+      if (els.sourceCanvas) drawFittedImage(els.sourceCanvas, state.processedSourceImage);
+      updateBackgroundInfo();
+
+      if (regenerate && state.generated) {
+        void generateArtworkFromCurrentImage();
+      }
+    }
+
     function createImageFromFile(file) {
       return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -143,28 +337,46 @@ const state = {
       const pixels = [];
       for (let i = 0; i < imageData.length; i += 4) {
         const alpha = imageData[i + 3] / 255;
-        const rgb = alpha < 0.1
-          ? [255, 255, 255]
-          : [imageData[i], imageData[i + 1], imageData[i + 2]];
-        pixels.push(rgb);
+        if (alpha < 0.08) {
+          pixels.push(null);
+          continue;
+        }
+        pixels.push([imageData[i], imageData[i + 1], imageData[i + 2]]);
       }
       return { width, height, pixels };
     }
 
     function kMeansQuantize(pixels, k) {
       const safeK = clamp(parseInt(k, 10) || 8, 5, 12);
-      const unique = [...new Map(pixels.map(p => [p.join(','), p])).values()];
-      const centroids = [];
-      for (let i = 0; i < safeK; i++) {
-        centroids.push(unique[Math.floor((i * unique.length) / safeK)] || unique[0] || [255,255,255]);
+      const opaquePixels = [];
+      const opaqueIndexes = [];
+
+      pixels.forEach((pixel, index) => {
+        if (!pixel) return;
+        opaquePixels.push(pixel);
+        opaqueIndexes.push(index);
+      });
+
+      if (!opaquePixels.length) {
+        return {
+          palette: [],
+          cells: new Array(pixels.length).fill(-1),
+          transparentCount: pixels.length
+        };
       }
 
-      let assignments = new Array(pixels.length).fill(0);
+      const unique = [...new Map(opaquePixels.map(pixel => [pixel.join(','), pixel])).values()];
+      const centroids = [];
+      for (let i = 0; i < safeK; i++) {
+        centroids.push(unique[Math.floor((i * unique.length) / safeK)] || unique[0] || [255, 255, 255]);
+      }
+
+      let assignments = new Array(opaquePixels.length).fill(0);
       for (let round = 0; round < 10; round++) {
         let moved = false;
 
-        for (let i = 0; i < pixels.length; i++) {
-          const pixel = pixels[i];
+        for (let i = 0; i < opaquePixels.length; i++) {
+          const pixel = opaquePixels[i];
           let bestIndex = 0;
           let bestDistance = Infinity;
           for (let c = 0; c < centroids.length; c++) {
@@ -179,12 +391,12 @@ const state = {
         }
 
         const sums = Array.from({ length: centroids.length }, () => [0, 0, 0, 0]);
-        for (let i = 0; i < pixels.length; i++) {
+        for (let i = 0; i < opaquePixels.length; i++) {
           const idx = assignments[i];
           const bucket = sums[idx];
-          bucket[0] += pixels[i][0];
-          bucket[1] += pixels[i][1];
-          bucket[2] += pixels[i][2];
+          bucket[0] += opaquePixels[i][0];
+          bucket[1] += opaquePixels[i][1];
+          bucket[2] += opaquePixels[i][2];
           bucket[3] += 1;
         }
 
@@ -207,6 +419,7 @@ const state = {
 
       const order = centroids
         .map((rgb, oldIndex) => ({ rgb, oldIndex, count: counts[oldIndex] }))
+        .filter(item => item.count > 0)
         .sort((a, b) => b.count - a.count);
 
       const remap = new Map(order.map((item, newIndex) => [item.oldIndex, newIndex]));
@@ -216,18 +429,31 @@ const state = {
         rgb: item.rgb,
         count: item.count
       }));
-      const cells = assignments.map(index => remap.get(index));
+      const cells = new Array(pixels.length).fill(-1);
+      assignments.forEach((index, opaqueIndex) => {
+        cells[opaqueIndexes[opaqueIndex]] = remap.get(index);
+      });
 
-      return { palette, cells };
+      return {
+        palette,
+        cells,
+        transparentCount: pixels.length - opaquePixels.length
+      };
     }
 
-    function buildGeneratedArtwork(name, image) {
+    function buildGeneratedArtwork(name, image, options = {}) {
       const baseName = sanitizeFileName(name || image.dataset?.defaultName || 'untitled');
       const width = clamp(parseInt(els.gridWidth.value, 10) || 32, 8, 128);
       const paletteCount = clamp(parseInt(els.paletteCount.value, 10) || 8, 5, 12);
       const exportCellSize = clamp(parseInt(els.exportCellSize.value, 10) || 18, 8, 40);
       const downsampled = downsampleImage(image, width);
       const quantized = kMeansQuantize(downsampled.pixels, paletteCount);
+      const transparentCells = quantized.transparentCount || 0;
+      const hasTransparency = transparentCells > 0;
+
+      if (!quantized.palette.length) {
+        throw new Error('去背後沒有保留任何像素，請降低去背容差或關閉去背。');
+      }
 
       return {
         version: 1,
@@ -240,21 +466,24 @@ const state = {
         meta: {
           createdAt: new Date().toISOString(),
           sourceWidth: image.width,
-          sourceHeight: image.height
+          sourceHeight: image.height,
+          transparentCells,
+          hasTransparency,
+          backgroundRemoved: Boolean(options.background?.enabled && hasTransparency),
+          backgroundTolerance: options.background?.enabled ? options.background.tolerance : null
         }
       };
     }
 
     function renderPixelArt(canvas, artwork, options = {}) {
-      const {
-        showNumbers = false,
-        showGrid = true,
-        showColors = true,
-        cellSize = artwork.exportCellSize || 18,
-        paintedCells = null,
-        numberAlpha = 1,
-        whiteBackground = true
-      } = options;
+      const showNumbers = options.showNumbers ?? false;
+      const showGrid = options.showGrid ?? true;
+      const showColors = options.showColors ?? true;
+      const cellSize = options.cellSize ?? artwork.exportCellSize ?? 18;
+      const paintedCells = options.paintedCells ?? null;
+      const numberAlpha = options.numberAlpha ?? 1;
+      const whiteBackground = options.whiteBackground ?? !hasTransparentCells(artwork);
+      const showTransparentGrid = options.showTransparentGrid ?? false;
 
       canvas.width = artwork.width * cellSize;
       canvas.height = artwork.height * cellSize;
@@ -271,9 +500,23 @@ const state = {
         for (let x = 0; x < artwork.width; x++) {
           const idx = y * artwork.width + x;
           const paletteIndex = artwork.cells[idx];
+          const transparentCell = paletteIndex == null || paletteIndex < 0;
+          if (transparentCell) {
+            if (showTransparentGrid) {
+              ctx.strokeStyle = '#D7DEE8';
+              ctx.lineWidth = Math.max(1, Math.floor(cellSize / 18));
+              ctx.strokeRect(x * cellSize, y * cellSize, cellSize, cellSize);
+            }
+            continue;
+          }
+
           const paletteItem = artwork.palette[paletteIndex];
+          if (!paletteItem) continue;
+
           const fillColor = paintedCells
-            ? (paintedCells[idx] != null ? artwork.palette[paintedCells[idx]].hex : '#FFFFFF')
+            ? (paintedCells[idx] != null && artwork.palette[paintedCells[idx]]
+              ? artwork.palette[paintedCells[idx]].hex
+              : '#FFFFFF')
             : (showColors ? paletteItem.hex : '#FFFFFF');
 
           ctx.fillStyle = fillColor;
@@ -314,18 +557,23 @@ const state = {
         cellSize: state.generated.exportCellSize,
         numberAlpha: 0.9
       });
-      renderPaletteSummary(state.generated.palette);
+      renderPaletteSummary(state.generated);
     }
 
-    function renderPaletteSummary(palette) {
+    function renderPaletteSummary(artwork) {
       if (!els.palettePreviewBox) return;
-      els.palettePreviewBox.innerHTML = palette.map(item => `
+      const paletteHtml = artwork.palette.map(item => `
         <span class="pill" style="margin: 0 8px 8px 0; display:inline-flex;">
           <span style="width:18px; height:18px; border-radius:999px; background:${item.hex}; border:1px solid rgba(0,0,0,.08);"></span>
           <strong>${item.id}</strong>
           <span class="muted">${item.hex}</span>
         </span>
       `).join('');
+      const transparentCells = artwork.meta?.transparentCells || 0;
+      const transparentHtml = transparentCells
+        ? `<span class="pill" style="margin: 0 8px 8px 0; display:inline-flex;"><strong>透明</strong><span class="muted">${transparentCells} 格</span></span>`
+        : '';
+      els.palettePreviewBox.innerHTML = paletteHtml + transparentHtml;
     }
 
     function setGeneratedReady(ready) {
@@ -351,11 +599,24 @@ const state = {
         if (els.offlineStatus) els.offlineStatus.textContent = '請先匯入圖片。';
         return;
       }
-      const name = els.imageName.value.trim() || state.sourceName || 'untitled';
-      state.generated = buildGeneratedArtwork(name, state.sourceImage);
-      updateOfflinePreviews();
-      setGeneratedReady(true);
-      els.offlineStatus.textContent = `已完成：${state.generated.name}，尺寸 ${state.generated.width} × ${state.generated.height}，共 ${state.generated.palette.length} 色。`;
+      try {
+        const name = els.imageName.value.trim() || state.sourceName || 'untitled';
+        const workingImage = state.processedSourceImage || state.sourceImage;
+        state.generated = buildGeneratedArtwork(name, workingImage, {
+          background: state.backgroundStats
+        });
+        updateOfflinePreviews();
+        setGeneratedReady(true);
+        const transparentCells = state.generated.meta?.transparentCells || 0;
+        const transparentText = transparentCells ? `，透明 ${transparentCells} 格` : '';
+        els.offlineStatus.textContent = `已完成：${state.generated.name}，尺寸 ${state.generated.width} × ${state.generated.height}，共 ${state.generated.palette.length} 色${transparentText}。`;
+      } catch (error) {
+        state.generated = null;
+        setGeneratedReady(false);
+        if (els.offlineStatus) {
+          els.offlineStatus.textContent = error.message || '圖片解析失敗。';
+        }
+      }
     }
 
     async function loadDemoImage() {
@@ -379,7 +640,7 @@ const state = {
         state.sourceImage = img;
         state.sourceName = 'demo-smile';
         if (els.imageName) els.imageName.value = 'demo-smile';
-        if (els.sourceCanvas) drawFittedImage(els.sourceCanvas, img);
+        refreshSourcePreview();
         await generateArtworkFromCurrentImage();
       };
       img.src = demoCanvas.toDataURL('image/png');
@@ -600,6 +861,7 @@ const state = {
 
       const idx = cellY * state.currentArtwork.width + cellX;
       const expected = state.currentArtwork.cells[idx];
+      if (expected == null || expected < 0) return;
       const canPaint = state.forceFill || expected === state.selectedPaletteIndex;
       if (!canPaint) return;
 
@@ -654,9 +916,11 @@ const state = {
         try {
           const img = await createImageFromFile(file);
           state.sourceImage = img;
+          state.generated = null;
           state.sourceName = file.name.replace(/\.[^.]+$/, '');
           if (els.imageName) els.imageName.value = els.imageName.value.trim() || state.sourceName;
-          if (els.sourceCanvas) drawFittedImage(els.sourceCanvas, img);
+          setGeneratedReady(false);
+          refreshSourcePreview();
           if (els.offlineStatus) els.offlineStatus.textContent = `已載入圖片：${file.name}`;
         } catch (error) {
           if (els.offlineStatus) els.offlineStatus.textContent = '圖片讀取失敗。';
@@ -665,6 +929,11 @@ const state = {
 
       on(els.generateBtn, 'click', generateArtworkFromCurrentImage);
       on(els.loadDemoBtn, 'click', loadDemoImage);
+      on(els.removeBackgroundToggle, 'change', () => refreshSourcePreview({ regenerate: true }));
+      on(els.backgroundTolerance, 'input', () => {
+        if (!els.removeBackgroundToggle?.checked) return;
+        refreshSourcePreview({ regenerate: true });
+      });
 
       on(els.exportJsonBtn, 'click', () => {
         if (!state.generated) return;
@@ -718,6 +987,8 @@ const state = {
 
     function bootstrap() {
       attachEvents();
+      syncBackgroundControls();
+      updateBackgroundInfo();
 
       if (PAGE_MODE === 'offline') {
         setGeneratedReady(false);

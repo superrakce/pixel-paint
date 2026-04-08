@@ -115,6 +115,12 @@
       font-weight: 600;
     }
 
+    .field-help {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
     .field input,
     .field select {
       min-height: 44px;
@@ -122,6 +128,22 @@
       border-radius: 12px;
       padding: 10px 12px;
       background: #fff;
+    }
+
+    .toggle-field {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 44px;
+      color: var(--text);
+      cursor: pointer;
+    }
+
+    .toggle-field input[type="checkbox"] {
+      width: 18px;
+      height: 18px;
+      margin: 0;
+      accent-color: var(--primary);
     }
 
     .section-title {
@@ -171,12 +193,27 @@
       max-height: 460px;
     }
 
+    .checkerboard {
+      background-color: #f5f7fb;
+      background-image:
+        linear-gradient(45deg, rgba(36, 48, 66, 0.06) 25%, transparent 25%),
+        linear-gradient(-45deg, rgba(36, 48, 66, 0.06) 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, rgba(36, 48, 66, 0.06) 75%),
+        linear-gradient(-45deg, transparent 75%, rgba(36, 48, 66, 0.06) 75%);
+      background-size: 20px 20px;
+      background-position: 0 0, 0 10px, 10px -10px, -10px 0;
+    }
+
     canvas {
       image-rendering: pixelated;
       image-rendering: crisp-edges;
       display: block;
       max-width: 100%;
       background: #fff;
+    }
+
+    .transparent-canvas {
+      background: transparent;
     }
 
     .export-list {

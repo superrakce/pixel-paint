@@ -48,6 +48,18 @@
               <label for="exportCellSize">匯出格子尺寸</label>
               <input id="exportCellSize" type="number" min="8" max="40" value="18" />
             </div>
+            <div class="field">
+              <label class="toggle-field" for="removeBackgroundToggle">
+                <input id="removeBackgroundToggle" type="checkbox" />
+                <span>自動去背</span>
+              </label>
+              <div class="field-help">只移除與外框相連、且和四角背景相近的區域。</div>
+            </div>
+            <div class="field">
+              <label for="backgroundTolerance">去背容差</label>
+              <input id="backgroundTolerance" type="number" min="0" max="120" value="28" />
+              <div class="field-help" id="backgroundInfo">未啟用去背，會保留原圖背景。</div>
+            </div>
           </div>
 
           <div class="inline-actions" style="margin-top: 14px;">
@@ -71,16 +83,16 @@
         <div>
           <div class="preview-grid">
             <div class="preview-box">
-              <h3>原始圖片</h3>
-              <div class="canvas-wrap"><canvas id="sourceCanvas"></canvas></div>
+              <h3>原圖 / 去背預覽</h3>
+              <div class="canvas-wrap checkerboard"><canvas id="sourceCanvas" class="transparent-canvas"></canvas></div>
             </div>
             <div class="preview-box">
               <h3>像素化圖片</h3>
-              <div class="canvas-wrap"><canvas id="pixelCanvas"></canvas></div>
+              <div class="canvas-wrap checkerboard"><canvas id="pixelCanvas" class="transparent-canvas"></canvas></div>
             </div>
             <div class="preview-box">
               <h3>底圖（線條 + 編號）</h3>
-              <div class="canvas-wrap"><canvas id="outlineCanvas"></canvas></div>
+              <div class="canvas-wrap checkerboard"><canvas id="outlineCanvas" class="transparent-canvas"></canvas></div>
             </div>
           </div>
           <div class="hint-box" id="palettePreviewBox">完成解析後，這裡會顯示顏色編號摘要。</div>
