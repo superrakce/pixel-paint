@@ -15,6 +15,7 @@ const state = {
       generated: null,
       gallery: [],
       currentArtwork: null,
+      completionCelebrated: false,
       paintedCells: [],
       selectedPaletteIndex: null,
       dragFillLocked: false,
@@ -83,6 +84,7 @@ const state = {
       paletteBar: document.getElementById('paletteBar'),
       pixelThumbCanvas: document.getElementById('pixelThumbCanvas'),
       progressThumbCanvas: document.getElementById('progressThumbCanvas'),
+      celebrationLayer: document.getElementById('celebrationLayer'),
       dragFillLockToggle: document.getElementById('dragFillLockToggle'),
       dragFillLockCheck: document.getElementById('dragFillLockCheck'),
       selectedColorText: document.getElementById('selectedColorText'),
@@ -935,6 +937,7 @@ const state = {
       state.paintedCells = stored
         ? JSON.parse(stored)
         : new Array(artwork.cells.length).fill(null);
+      state.completionCelebrated = getIncompletePaletteIndexes(artwork).length === 0;
 
       if (els.playTitle) els.playTitle.textContent = artwork.name || '未命名圖片';
       if (els.playSubtitle) els.playSubtitle.textContent = `請先從下方選擇色塊，再點擊底圖上的對應編號。只有相同編號的區塊會被填色。`;
@@ -975,9 +978,44 @@ const state = {
       return readSelectedArtwork();
     }
 
+    function isPaletteIndexComplete(artwork, paletteIndex) {
+      if (!artwork || paletteIndex == null) return false;
+      let hasAnyCell = false;
+      for (let i = 0; i < artwork.cells.length; i++) {
+        if (artwork.cells[i] !== paletteIndex) continue;
+        hasAnyCell = true;
+        if (state.paintedCells[i] !== paletteIndex) {
+          return false;
+        }
+      }
+      return hasAnyCell;
+    }
+
+    function getIncompletePaletteIndexes(artwork) {
+      if (!artwork) return [];
+      return artwork.palette
+        .map((_, index) => index)
+        .filter(index => !isPaletteIndexComplete(artwork, index));
+    }
+
+    function syncSelectedPaletteIndex(artwork) {
+      const incompleteIndexes = getIncompletePaletteIndexes(artwork);
+      if (!incompleteIndexes.length) {
+        state.selectedPaletteIndex = null;
+        return incompleteIndexes;
+      }
+
+      if (!incompleteIndexes.includes(state.selectedPaletteIndex)) {
+        state.selectedPaletteIndex = incompleteIndexes[0];
+      }
+
+      return incompleteIndexes;
+    }
+
     function renderPaletteBar(artwork) {
       if (!els.paletteBar) return;
       els.paletteBar.innerHTML = '';
+      const incompleteIndexes = syncSelectedPaletteIndex(artwork);
 
       const bucketToggle = document.createElement('button');
       bucketToggle.type = 'button';
@@ -998,7 +1036,8 @@ const state = {
       });
       els.paletteBar.appendChild(bucketToggle);
 
-      artwork.palette.forEach((item, index) => {
+      incompleteIndexes.forEach(index => {
+        const item = artwork.palette[index];
         const swatch = document.createElement('button');
         swatch.className = 'swatch' + (state.selectedPaletteIndex === index ? ' active' : '');
         swatch.innerHTML = `
@@ -1026,6 +1065,66 @@ const state = {
 
     function updateSelectedColorText() {
       if (!els.selectedColorText) return;
+    }
+
+    function playCompletionCelebration() {
+      if (!els.celebrationLayer || typeof window.gsap === 'undefined') return;
+
+      els.celebrationLayer.innerHTML = '';
+      const colors = ['#315EFB', '#F25F5C', '#F6B73C', '#28C76F', '#111827', '#FFFFFF'];
+      const pieces = Array.from({ length: 42 }, (_, index) => {
+        const piece = document.createElement('span');
+        piece.className = 'confetti-piece';
+        piece.style.left = `${(index / 42) * 100}%`;
+        piece.style.background = colors[index % colors.length];
+        piece.style.transform = `translate3d(0, -40px, 0) rotate(${Math.round(Math.random() * 180)}deg)`;
+        els.celebrationLayer.appendChild(piece);
+        return piece;
+      });
+
+      window.gsap.set(pieces, {
+        opacity: 1,
+        xPercent: () => window.gsap.utils.random(-120, 120),
+        y: -40,
+        rotate: () => window.gsap.utils.random(-120, 120),
+        scale: () => window.gsap.utils.random(0.7, 1.15)
+      });
+
+      const timeline = window.gsap.timeline({
+        onComplete: () => {
+          els.celebrationLayer.innerHTML = '';
+        }
+      });
+
+      timeline.to(pieces, {
+        duration: 1.8,
+        y: () => window.innerHeight + window.gsap.utils.random(80, 180),
+        x: () => window.gsap.utils.random(-180, 180),
+        rotate: () => window.gsap.utils.random(-540, 540),
+        ease: 'power2.out',
+        stagger: {
+          each: 0.015,
+          from: 'random'
+        }
+      }, 0);
+
+      timeline.to(pieces, {
+        duration: 0.45,
+        opacity: 0,
+        ease: 'power1.out',
+        stagger: {
+          each: 0.01,
+          from: 'random'
+        }
+      }, 1.2);
+    }
+
+    function maybePlayCompletionCelebration() {
+      if (!state.currentArtwork || state.completionCelebrated) return;
+      if (getIncompletePaletteIndexes(state.currentArtwork).length > 0) return;
+      state.completionCelebrated = true;
+      fitArtworkToViewport();
+      requestAnimationFrame(() => playCompletionCelebration());
     }
 
     function renderPaletteThumbs() {
@@ -1098,7 +1197,9 @@ const state = {
         cellSize: state.zoom,
         numberAlpha: 0.92
       });
+      renderPaletteBar(state.currentArtwork);
       renderPaletteThumbs();
+      maybePlayCompletionCelebration();
     }
 
     function savePaintingProgress() {
@@ -1279,6 +1380,7 @@ const state = {
     function clearPainting() {
       if (!state.currentArtwork) return;
       state.paintedCells = new Array(state.currentArtwork.cells.length).fill(null);
+      state.completionCelebrated = false;
       localStorage.removeItem(progressKey(state.currentArtwork));
       renderPlayCanvas();
     }
