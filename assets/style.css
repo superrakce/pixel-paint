@@ -426,8 +426,11 @@
     }
 
     body[data-page="draw"] .stage-inner {
+      width: max-content;
       min-width: 100%;
+      height: max-content;
       min-height: 100%;
+      box-sizing: border-box;
       display: flex;
       align-items: center;
       justify-content: center;
