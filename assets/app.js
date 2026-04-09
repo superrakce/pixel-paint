@@ -34,7 +34,9 @@ const state = {
       touchPanStartY: 0,
       touchPanStartScrollLeft: 0,
       touchPanStartScrollTop: 0,
-      touchPanMoved: false
+      touchPanMoved: false,
+      audioContext: null,
+      lastDragPaintSoundAt: 0
     };
 
     const els = {
@@ -158,6 +160,120 @@ const state = {
 
     function clamp(value, min, max) {
       return Math.max(min, Math.min(max, value));
+    }
+
+    function getAudioContext() {
+      if (state.audioContext) return state.audioContext;
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) return null;
+      state.audioContext = new AudioContextClass();
+      return state.audioContext;
+    }
+
+    function playOscillatorTone(ctx, options = {}) {
+      const {
+        type = 'triangle',
+        startFrequency = 440,
+        endFrequency = startFrequency,
+        gain = 0.05,
+        duration = 0.08,
+        attack = 0.008,
+        release = duration,
+        startTime = ctx.currentTime
+      } = options;
+
+      const oscillator = ctx.createOscillator();
+      const gainNode = ctx.createGain();
+
+      oscillator.type = type;
+      oscillator.frequency.setValueAtTime(startFrequency, startTime);
+      oscillator.frequency.exponentialRampToValueAtTime(
+        Math.max(1, endFrequency),
+        startTime + duration
+      );
+
+      gainNode.gain.setValueAtTime(0.0001, startTime);
+      gainNode.gain.exponentialRampToValueAtTime(Math.max(0.0001, gain), startTime + attack);
+      gainNode.gain.exponentialRampToValueAtTime(0.0001, startTime + release);
+
+      oscillator.connect(gainNode);
+      gainNode.connect(ctx.destination);
+      oscillator.start(startTime);
+      oscillator.stop(startTime + duration + 0.02);
+    }
+
+    function resolvePaintSoundMode(event, filledCount) {
+      if (filledCount > 1 || state.bucketFillEnabled) return 'bucket';
+      if (state.dragFillLocked && state.isPainting) return 'drag';
+      return 'single';
+    }
+
+    function playPaintSound(event, filledCount) {
+      if (!filledCount) return;
+
+      const mode = resolvePaintSoundMode(event, filledCount);
+      const now = performance.now();
+      if (mode === 'drag' && now - state.lastDragPaintSoundAt < 45) {
+        return;
+      }
+      if (mode === 'drag') {
+        state.lastDragPaintSoundAt = now;
+      }
+
+      const ctx = getAudioContext();
+      if (!ctx) return;
+      if (ctx.state === 'suspended') {
+        ctx.resume().catch(() => {});
+      }
+
+      const startTime = ctx.currentTime + 0.001;
+      if (mode === 'bucket') {
+        const sweepBoost = clamp(filledCount, 2, 24);
+        playOscillatorTone(ctx, {
+          type: 'triangle',
+          startFrequency: 280 + sweepBoost * 7,
+          endFrequency: 520 + sweepBoost * 9,
+          gain: 0.05,
+          duration: 0.12,
+          release: 0.14,
+          startTime
+        });
+        playOscillatorTone(ctx, {
+          type: 'sine',
+          startFrequency: 420 + sweepBoost * 5,
+          endFrequency: 660 + sweepBoost * 7,
+          gain: 0.03,
+          duration: 0.16,
+          attack: 0.012,
+          release: 0.18,
+          startTime: startTime + 0.015
+        });
+        return;
+      }
+
+      if (mode === 'drag') {
+        playOscillatorTone(ctx, {
+          type: 'square',
+          startFrequency: 360,
+          endFrequency: 420,
+          gain: 0.018,
+          duration: 0.035,
+          attack: 0.004,
+          release: 0.04,
+          startTime
+        });
+        return;
+      }
+
+      playOscillatorTone(ctx, {
+        type: 'triangle',
+        startFrequency: 430,
+        endFrequency: 620,
+        gain: 0.035,
+        duration: 0.07,
+        release: 0.08,
+        startTime
+      });
     }
 
     function sanitizeFileName(name) {
@@ -1208,17 +1324,17 @@ const state = {
     }
 
     function fillConnectedCells(startIndex, paletteIndex) {
-      if (!state.currentArtwork) return false;
+      if (!state.currentArtwork) return 0;
 
       const expected = state.currentArtwork.cells[startIndex];
-      if (expected == null || expected < 0 || expected !== paletteIndex) return false;
+      if (expected == null || expected < 0 || expected !== paletteIndex) return 0;
 
       const width = state.currentArtwork.width;
       const height = state.currentArtwork.height;
       const total = width * height;
       const visited = new Uint8Array(total);
       const stack = [startIndex];
-      let changed = false;
+      let changedCount = 0;
 
       while (stack.length) {
         const idx = stack.pop();
@@ -1229,7 +1345,7 @@ const state = {
 
         if (state.paintedCells[idx] !== paletteIndex) {
           state.paintedCells[idx] = paletteIndex;
-          changed = true;
+          changedCount += 1;
         }
 
         const x = idx % width;
@@ -1241,7 +1357,7 @@ const state = {
         if (y < height - 1) stack.push(idx + width);
       }
 
-      return changed;
+      return changedCount;
     }
 
     function trackPointer(event) {
@@ -1363,15 +1479,16 @@ const state = {
       const canPaint = expected === state.selectedPaletteIndex;
       if (!canPaint) return;
 
-      const changed = state.bucketFillEnabled
+      const filledCount = state.bucketFillEnabled
         ? fillConnectedCells(idx, state.selectedPaletteIndex)
         : (() => {
-          if (state.paintedCells[idx] === state.selectedPaletteIndex) return false;
+          if (state.paintedCells[idx] === state.selectedPaletteIndex) return 0;
           state.paintedCells[idx] = state.selectedPaletteIndex;
-          return true;
+          return 1;
         })();
 
-      if (changed) {
+      if (filledCount > 0) {
+        playPaintSound(event, filledCount);
         renderPlayCanvas();
         savePaintingProgress();
       }
